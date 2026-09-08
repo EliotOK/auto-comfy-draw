@@ -1,0 +1,22 @@
+{
+  "name": "demo",
+  "model": "waiIllustriousSDXL_v170.safetensors",
+  "lora": null,
+  "lora_strength": 0.9,
+  "positive": "masterpiece, best quality, very aesthetic, absurdres",
+  "negative": "lowres, bad anatomy, bad hands, extra fingers, extra limbs, mutated, deformed, blurry, jpeg artifacts, watermark, text, signature, watermark, monochrome, low quality, worst quality",
+  "width": 832,
+  "height": 1216,
+  "steps": 28,
+  "cfg": 6.5,
+  "sampler": "dpmpp_2m",
+  "scheduler": "karras",
+  "denoise": 1.0,
+  "start_cmd": "",
+  "output_dir": "C:/Users/<you>/Pictures/comfy_out",
+  "prefix": "comfy/demo",
+  "prompts": [
+    {"name": "city_dusk", "prompt": "a city skyline at dusk, cinematic lighting, wide shot"},
+    {"name": "cat_roof", "prompt": "a cat sitting on a tiled roof, golden hour, shallow depth of field"}
+  ]
+}
