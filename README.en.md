@@ -12,24 +12,6 @@ An **agent skill** that drives a local or remote **ComfyUI** server for text-to-
 
 You describe the image; the skill configures the ComfyUI workflow, builds the prompt, batch-runs it, and returns the saved outputs. Config-driven and content-neutral — what the prompt describes is entirely up to you.
 
-## How to talk to your agent (suggested prompts)
-
-You only **converse** — no need to type any CLI. `--discover` / `--scaffold` etc. are run by the agent under the hood. Just say:
-
-- "Draw a city skyline at dusk"
-- "Use waiIllustriousSDXL with LoRA xxx to draw a cat on a roof, output to D:/my_imgs, 4 images"
-- "Make this ref.png more realistic" (img2img)
-- "Change the seed / give me 4 more / add detail"
-
-| What you say | What the agent does |
-|---|---|
-| "Draw a <description>" (first time) | scan available models → ask model/LoRA/output/ref image → build config → self-check → generate |
-| "Use <model> <lora> to draw <description>" | build config and run with your description |
-| "Change this image into <style>" | img2img (`--init` + `--denoise`) |
-| "Change seed / add detail" | adjust `--seed-basis` / `--count` and re-run |
-
-> The clearer your description (subject / style / composition / reference image), the closer the result. No CLI to memorize.
-
 **Example output** (produced by this pipeline):
 
 ![example output](examples/example_output.png)
@@ -75,6 +57,24 @@ python pipeline.py --check --config config.demo.json
 # 4. Generate
 python pipeline.py --config config.demo.json --prompt "a city at dusk" --count 4
 ```
+
+## How to talk to your agent (suggested prompts)
+
+You only **converse** — no need to type any CLI. `--discover` / `--scaffold` etc. are run by the agent under the hood. Just say:
+
+- "Draw a city skyline at dusk"
+- "Use waiIllustriousSDXL with LoRA xxx to draw a cat on a roof, output to D:/my_imgs, 4 images"
+- "Make this ref.png more realistic" (img2img)
+- "Change the seed / give me 4 more / add detail"
+
+| What you say | What the agent does |
+|---|---|
+| "Draw a <description>" (first time) | scan available models → ask model/LoRA/output/ref image → build config → self-check → generate |
+| "Use <model> <lora> to draw <description>" | build config and run with your description |
+| "Change this image into <style>" | img2img (`--init` + `--denoise`) |
+| "Change seed / add detail" | adjust `--seed-basis` / `--count` and re-run |
+
+> The clearer your description (subject / style / composition / reference image), the closer the result. No CLI to memorize.
 
 ## Commands
 

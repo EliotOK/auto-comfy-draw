@@ -12,24 +12,6 @@
 
 你只需描述想要的画面，这个 skill 会帮你配好 ComfyUI 工作流、写好 prompt、批量出图并返回成品。**配置驱动、内容中立**——prompt 想写什么完全由你决定。
 
-## 怎么对 agent 开口（推荐 prompt）
-
-用户**只对话，不用敲任何命令行**。`--discover` / `--scaffold` 等命令由 agent 在底层执行。你可以直接说：
-
-- "帮我画一张傍晚的城市天际线"
-- "用 waiIllustriousSDXL 和 xxx LoRA 画一只猫在屋顶，输出到 D:/my_imgs，出 4 张"
-- "把这张 ref.png 改得更写实一点"（img2img）
-- "换个种子 / 再来 4 张 / 加点细节"
-
-| 你说的话 | agent 会做 |
-|---|---|
-| "帮我画一张 <描述>"（首次） | 扫描可用模型 → 问你模型/LoRA/输出/是否垫图 → 生成配置 → 自检 → 出图 |
-| "用 <模型> <lora> 画 <描述>" | 直接生成配置，用你的描述跑图 |
-| "把这张图改成 <风格>" | 图生图（`--init` + `--denoise`） |
-| "换个种子 / 加细节" | 调 `--seed-basis` / `--count` 重跑 |
-
-> 描述得越清楚（主体 / 风格 / 构图 / 是否垫图），出图越贴近你想要；不用记任何命令行。
-
 **示例输出**（由本流水线生成）：
 
 ![example output](examples/example_output.png)
@@ -75,6 +57,24 @@ python pipeline.py --check --config config.demo.json
 # 4. 出图
 python pipeline.py --config config.demo.json --prompt "a city at dusk" --count 4
 ```
+
+## 怎么对 agent 开口（推荐 prompt）
+
+用户**只对话，不用敲任何命令行**。`--discover` / `--scaffold` 等命令由 agent 在底层执行。你可以直接说：
+
+- "帮我画一张傍晚的城市天际线"
+- "用 waiIllustriousSDXL 和 xxx LoRA 画一只猫在屋顶，输出到 D:/my_imgs，出 4 张"
+- "把这张 ref.png 改得更写实一点"（img2img）
+- "换个种子 / 再来 4 张 / 加点细节"
+
+| 你说的话 | agent 会做 |
+|---|---|
+| "帮我画一张 <描述>"（首次） | 扫描可用模型 → 问你模型/LoRA/输出/是否垫图 → 生成配置 → 自检 → 出图 |
+| "用 <模型> <lora> 画 <描述>" | 直接生成配置，用你的描述跑图 |
+| "把这张图改成 <风格>" | 图生图（`--init` + `--denoise`） |
+| "换个种子 / 加细节" | 调 `--seed-basis` / `--count` 重跑 |
+
+> 描述得越清楚（主体 / 风格 / 构图 / 是否垫图），出图越贴近你想要；不用记任何命令行。
 
 ## 命令
 
