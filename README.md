@@ -14,7 +14,9 @@
 
 **示例输出**（由本流水线生成）：
 
-![example output](examples/example_output.png)
+<img src="examples/example_output.png" width="480" alt="example output">
+
+> 时雨绮罗生日快乐！🎂
 
 ---
 

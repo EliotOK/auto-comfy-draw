@@ -14,7 +14,9 @@ You describe the image; the skill configures the ComfyUI workflow, builds the pr
 
 **Example output** (produced by this pipeline):
 
-![example output](examples/example_output.png)
+<img src="examples/example_output.png" width="480" alt="example output">
+
+> Happy birthday, Shigure Kira! 🎂
 
 ---
 
