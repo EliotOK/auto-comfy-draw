@@ -1,5 +1,11 @@
 # auto-comfy-draw · ComfyUI 一键绘图助手
 
+<p>
+  <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green.svg">
+  <img alt="Python" src="https://img.shields.io/badge/Python-3.7%2B-blue.svg">
+  <img alt="Backend: ComfyUI" src="https://img.shields.io/badge/Backend-ComfyUI-8A2BE2.svg">
+</p>
+
 > 你只要说想画什么，auto-comfy-draw帮你：**扫描可用模型/LoRA + 配好工作流 + 写好 prompt + 一键批量出图**。不用手搓复杂提示词，也不用改配置 JSON。
 
 ![示例输出](examples/example_output.png)
