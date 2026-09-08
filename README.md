@@ -6,7 +6,7 @@
   <img alt="Backend: ComfyUI" src="https://img.shields.io/badge/Backend-ComfyUI-8A2BE2.svg">
 </p>
 
-> 你只要说想画什么，auto-comfy-draw帮你：**扫描可用模型/LoRA + 配好工作流 + 写好 prompt + 一键批量出图**。不用手搓复杂提示词，也不用改配置 JSON。
+> 无须配置复杂工作流/设计提示词，用自然语言搭建属于你的AI绘图方案：**扫描可用模型/LoRA + 配好工作流 + 写好 prompt + 一键批量出图**。不用手搓复杂提示词，也不用改配置 JSON。
 
 ![示例输出](examples/example_output.png)
 
