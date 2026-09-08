@@ -7,6 +7,25 @@ description: Help a user configure a ComfyUI workflow and generate good prompts 
 
 帮用户把"想画什么"变成"做好的图"：**配工作流 + 写 prompt + 批量出图**，用户不碰 JSON、不手写复杂提示词。
 
+## 用户怎么开口（推荐 prompt）→ agent 怎么接
+用户**只对话，不打 CLI**。`--discover` / `--scaffold` 等命令是**你（agent）在底层执行的**，把用户的话翻译成动作：
+
+| 用户开口 | 你该做的 |
+|---|---|
+| "帮我画一张 <描述>"（首次） | `--discover` 列可用模型 → 问模型/LoRA/输出/尺寸/是否垫图 → `--scaffold` 生成配置 → `--check` → 跑图 |
+| "用 <模型> <lora> 画 <描述>"（已给信息） | 直接 `--scaffold` 或复用已有 config，`--prompt` 跑图 |
+| "把这张/垫图改成 <风格>"（img2img） | `--init <参考图文件名> --denoise N` 跑图 |
+| "换个种子 / 再来 N 张 / 加点细节" | 改 `--seed-basis` / `--count` / 改 prompt 重跑 |
+| "别让我写 prompt；我不知道怎么写" | 你代他组织 prompt（按 config `positive`/`negative` 结构） |
+| "输出到 <目录> / 用某个模型" | 更新 config（`--scaffold` 或改 `output_dir`/`model`）再跑 |
+
+**推荐开场白（用户可说）**：
+- "帮我画一张傍晚的城市天际线"
+- "用 waiIllustriousSDXL 和 xxx LoRA 画一只猫在屋顶，输出到 D:/my_imgs，出 4 张"
+- "把这张 ref.png 改得更写实一点"
+
+你收到后**一步步走 onboarding**，而不是叫用户去敲命令行。
+
 ## 第一次上手（onboarding，先做这些）
 0. **ComfyUI 没起？先征求同意**
    - 若 `--discover`/`--check`/运行报 `ComfyUI not reachable` → **先提醒用户**"ComfyUI 还没启动"。

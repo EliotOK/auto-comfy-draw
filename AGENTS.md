@@ -21,6 +21,8 @@
    - 批量入队 + 轮询 `/queue`、`/history/<pid>`，下载到 output_dir，失败/超时非零退出；取消 `POST /queue {"clear":true}`。
 6. **交付**：给 `SAVED:` 路径；按需换 seed / 构图 / 细节再跑。
 
+> **用户只对话，不打 CLI**：`--discover`/`--scaffold`/`--check`/`--start`/`--config` 都是**你在底层执行的**。把用户的话翻译成命令（参考 SKILL.md 的"用户怎么开口→agent 怎么接"表），**绝不要让用户自己敲这些命令**；用户只需说"帮我画一张…"。
+
 ## 图生图 / 复现 / 远程
 - **图生图**：`--init <basename>` + `--denoise N`（参考图放进 ComfyUI input 目录）。
 - **复现**：`--seed-basis N` → 每 prompt 种子 = `N + 序号*100000 + 张数序号`。
