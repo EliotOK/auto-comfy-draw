@@ -1,90 +1,96 @@
 # auto-comfy-draw
 
+[中文](README.md) | [English](README.en.md)
+
 <p>
   <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green.svg">
   <img alt="Python" src="https://img.shields.io/badge/Python-3.7%2B-blue.svg">
   <img alt="Backend: ComfyUI" src="https://img.shields.io/badge/Backend-ComfyUI-8A2BE2.svg">
 </p>
 
-An **agent skill** that drives a local or remote **ComfyUI** server for text-to-image and image-to-image generation.
+一个 **agent skill**，用来驱动本地或远程的 **ComfyUI**，做**文生图 / 图生图**。
 
-You describe the image; the skill configures the ComfyUI workflow, builds the prompt, batch-runs it, and returns the saved outputs. Config-driven and content-neutral — what the prompt describes is entirely up to you.
+你只需描述想要的画面，这个 skill 会帮你配好 ComfyUI 工作流、写好 prompt、批量出图并返回成品。**配置驱动、内容中立**——prompt 想写什么完全由你决定。
 
-**Example output** (produced by this pipeline):
+**示例输出**（由本流水线生成）：
 
 ![example output](examples/example_output.png)
 
 ---
 
-## What this is
+## 这是什么
 
-- **`SKILL.md`** — the skill entry (frontmatter `name`/`description`). Loaded by your agent so it knows how to set up the workflow and generate prompts on your behalf.
-- **`pipeline.py`** — a harness-independent Python driver. It reads a config JSON, submits txt2img/img2img jobs, polls ComfyUI, downloads results, and reports errors.
-- **`AGENTS.md`** — the same workflow for harnesses that auto-read `AGENTS.md` from the working directory.
+- **`SKILL.md`** — skill 入口（frontmatter `name`/`description`）。由你的 agent 加载，让它知道怎么搭建工作流、替你生成 prompt。
+- **`pipeline.py`** — 与 harness 无关的 Python 驱动。读取配置 JSON，提交 txt2img/img2img 任务，轮询 ComfyUI，下载结果，并上报错误。
+- **`AGENTS.md`** — 面向会自动读取工作目录 `AGENTS.md` 的 harness 的同一套流程。
 
-## Requirements
+## 环境要求
 
 - Python 3.7+
-- A running ComfyUI (local or remote) with your models/LoRAs installed.
-- `pipeline.py` only calls the ComfyUI HTTP API (`/prompt`, `/queue`, `/history`, `/view`); no other dependencies.
+- 一个在运行的 **ComfyUI**（本地或远程），并已装好你的模型 / LoRA。
+- `pipeline.py` 只调用 ComfyUI 的 HTTP API（`/prompt`、`/queue`、`/history`、`/view`），无其他依赖。
 
-## Install as an agent skill
+## 安装为 agent skill
 
-This is packaged as a **`SKILL.md` skill**, so "install" depends on your agent's skill mechanism:
+本仓库以 **`SKILL.md`** skill 的形式打包，"安装"取决于你 agent 的 skill 机制：
 
-1. **DSH / Anthropic-compatible loaders** — drop this repo (or just `SKILL.md` + `pipeline.py` + `config.example.json`) into the directory your harness scans for skills. The `SKILL.md` frontmatter (`name: auto-comfy-draw`, `description`) is what registers it, so the agent can invoke it by matching the request.
-2. **Harnesses that auto-read `AGENTS.md`** — copy this repo’s `AGENTS.md` into your project/workspace root; it is injected into agent context automatically and instructs the agent to use this workflow.
-3. **Direct use** — `pipeline.py` is just a CLI; you can run it from a terminal without any agent.
+1. **DSH / Anthropic 兼容 loader** — 把这个仓库（或只需 `SKILL.md` + `pipeline.py` + `config.example.json`）放进你 harness 扫描 skill 的目录。`SKILL.md` 的 frontmatter（`name: auto-comfy-draw`、`description`）就是注册入口，agent 会据此匹配请求。
+2. **会自动读取 `AGENTS.md` 的 harness** — 把本仓库的 `AGENTS.md` 拷到你的项目/工作区根目录；它会自动注入 agent 上下文，指示 agent 使用这套流程。
+3. **直接当 CLI 用** — `pipeline.py` 本身是个命令行工具，不依赖任何 agent 也能跑。
 
-> The exact skill-directory path varies by harness — check your agent’s docs for where `SKILL.md` files are loaded from.
-> In this repo, `config*.json` is git-ignored (keep only `config.example.json`); your real configs stay local.
+> 具体的 skill 目录路径因 harness 而异——请查阅你所用 agent 的文档，确认 `SKILL.md` 从哪里加载。
+> 本仓库已 gitignore `config*.json`（仅保留 `config.example.json`），你的真实配置留在本地。
 
-## Quick start
+## 快速开始
 
 ```bash
-# 1. See what ComfyUI can actually use
+# 1. 看看 ComfyUI 实际能用什么
 python pipeline.py --discover
 
-# 2. Generate a config from your choices (model / lora / output dir)
+# 2. 根据你的选择生成配置（模型 / LoRA / 输出目录）
 python pipeline.py --scaffold --model sdxl_foo.safetensors --lora bar.safetensors \
     --output-dir D:/my_imgs --name demo --config config.demo.json
 
-# 3. Self-check (ComfyUI reachable? model present? output dir writable?)
+# 3. 自检（ComfyUI 可达？模型在不在？输出目录可写？）
 python pipeline.py --check --config config.demo.json
 
-# 4. Generate
+# 4. 出图
 python pipeline.py --config config.demo.json --prompt "a city at dusk" --count 4
 ```
 
-## Commands
+## 命令
 
-| Mode | Purpose |
+| 模式 | 作用 |
 |---|---|
-| `--discover` | List the checkpoints & LoRAs ComfyUI currently exposes. |
-| `--scaffold --model <m> [--lora <l>] --output-dir <dir> [--name <n>] [--config <c>] [--prompts "a|b"]` | Write a config JSON. |
-| `--check [--config c]` | Verify ComfyUI reachable, model exists, output dir writable. |
-| `--start [--start-cmd "<cmd>"]` | Launches ComfyUI and waits until reachable (**only after user consent**). |
-| `--config c --count N [--prompt ...] [--names a,b] [--init ref.png --denoise 0.6] [--seed-basis N] [--host/--port]` | Batch run. |
+| `--discover` | 列出 ComfyUI 当前暴露的底模与 LoRA。 |
+| `--scaffold --model <m> [--lora <l>] --output-dir <dir> [--name <n>] [--config <c>] [--prompts "a\|b"]` | 写出配置 JSON。 |
+| `--check [--config c]` | 自检（ComfyUI 可达、模型存在、输出目录可写）。 |
+| `--start [--start-cmd "<cmd>"]` | 拉起 ComfyUI 并等待就绪（**仅在征得用户同意后**）。 |
+| `--config c --count N [--prompt ...] [--names a,b] [--init ref.png --denoise 0.6] [--seed-basis N] [--host/--port]` | 批量出图。 |
 
-Batch behavior: probe port (8188/8189) → submit all jobs → poll `/queue` + `/history/<pid>` → download to `output_dir` → exit non-zero on failure/timeout. Cancel a batch with `POST /queue {"clear": true}`.
+批量行为：探活端口(8188/8189) → 全部入队 → 轮询 `/queue` + `/history/<pid>` → 下载到 `output_dir` → 失败/超时**非零退出**。取消批量：`POST /queue {"clear": true}`。
 
-## Prompt & config
+## Prompt 与配置
 
-`--prompt` takes prompt strings; separate **multiple prompts with `|`**. `--names a,b` runs named prompts from the config.
+`--prompt` 接收 prompt 字符串；**多个 prompt 用 `|` 分隔**。`--names a,b` 跑配置里的命名 prompt。
 
-`config.example.json` fields: `name`, `model`, `lora`/`lora_strength`, `positive`, `negative`, `width/height`, `steps/cfg/sampler/scheduler/denoise`, `start_cmd`, `output_dir`, `prefix`, `prompts`.
+`config.example.json` 字段：`name`、`model`、`lora`/`lora_strength`、`positive`、`negative`、`width/height`、`steps/cfg/sampler/scheduler/denoise`、`start_cmd`、`output_dir`、`prefix`、`prompts`。
 
-- **img2img**: `--init <basename>` + `--denoise N` (put the reference image in ComfyUI’s `input` dir).
-- **Reproducible**: `--seed-basis N` → per-prompt seed = `N + index*100000 + k`.
-- **Remote**: `--host/--port` to target a forwarded/tunneled ComfyUI; results are pulled back to `output_dir`.
+- **图生图**：`--init <basename>` + `--denoise N`（把参考图放进 ComfyUI 的 `input` 目录）。
+- **可复现**：`--seed-basis N` → 每个 prompt 种子 = `N + 序号*100000 + k`。
+- **远程**：`--host/--port` 指向转发/隧道后的 ComfyUI，结果会拉回 `output_dir`。
 
-## Auto-starting ComfyUI (consent-gated)
+## 自动启动 ComfyUI（需经同意）
 
-If ComfyUI isn’t running, `--discover`/`--check` fail with a clear message. You can **let the agent start it for you**, but only after you agree:
+如果 ComfyUI 没在运行，`--discover`/`--check` 会给出明确报错。你可以**让 agent 帮你启动**，但**必须先经你同意**：
 
-- Ask first; if you consent, run `python pipeline.py --start --start-cmd "<comfyui launch command>"` (or set `start_cmd` in the config). It waits up to 120s for `/system_stats`.
-- The agent must **never** auto-start without your consent; if you decline or it fails, start ComfyUI yourself and re-run.
+- 先征求同意；你同意后执行 `python pipeline.py --start --start-cmd "<comfyui 启动命令>"`（或在配置里设 `start_cmd`）。它最多等待 120 秒轮询 `/system_stats`。
+- agent **绝不会在未经你同意时自动启动**；你不同意或启动失败时，就自己启动 ComfyUI 再重跑。
 
 ## License
 
-MIT (see `LICENSE`). This repo contains only tooling/documentation — no generated art or third-party assets.
+MIT（见 `LICENSE`）。本仓库仅含工具/文档，不含任何生成的图像或第三方素材。
+
+## 示例输出
+
+可在 [examples/example_output.png](examples/example_output.png) 查看由本流水线生成的一张示例图。
