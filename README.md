@@ -1,4 +1,4 @@
-# auto-comfy-draw · ComfyUI 一键绘图助手
+# auto-comfy-draw · ComfyUI 绘图skill
 
 <p>
   <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green.svg">
