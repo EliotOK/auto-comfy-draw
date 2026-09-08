@@ -2,6 +2,8 @@
 
 > 你只要说想画什么，auto-comfy-draw帮你：**扫描可用模型/LoRA + 配好工作流 + 写好 prompt + 一键批量出图**。不用手搓复杂提示词，也不用改配置 JSON。
 
+![示例输出](examples/example_output.png)
+
 ## 第一次用（三步就绪）
 
 **1. 扫描可用资源**
