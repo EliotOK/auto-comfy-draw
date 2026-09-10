@@ -16,8 +16,9 @@ Usage:
       --output-dir C:/out --name demo --config config.demo.json
   python pipeline.py --config config.json --count 3 --prompt "a city at dusk"
   python pipeline.py --config config.json --init ref.png --denoise 0.6 --count 4
+  python pipeline.py --config config.json --server-out --count 4   # let ComfyUI write to its own output dir (no download)
 """
-import json, os, sys, time, random, subprocess, shlex, urllib.request, urllib.parse, argparse
+import json, os, re, sys, time, random, subprocess, shlex, urllib.request, urllib.parse, argparse
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORTS = (8188, 8189)
@@ -78,25 +79,33 @@ def cmd_discover(base):
     for x in lora: print("  -", x)
     print("TIP: if a model/LoRA is missing, restart ComfyUI (new files are picked up on boot).")
 
-def cmd_check(base, cfg_path):
+def cmd_check(base, cfg_path, server_out=None):
     ok = True
     ck = list_models(base, "ckpt_name", "CheckpointLoaderSimple")
     if cfg_path:
         cfg = json.load(open(cfg_path, encoding="utf-8"))
+        server_root = server_out or cfg.get("server_output_dir")
         model = cfg.get("model")
         if model and model not in ck:
             print(f"[FAIL] model '{model}' not found in ComfyUI checkpoints.")
             ok = False
         else:
             print(f"[ok] model '{model}' found.")
-        outdir = cfg.get("output_dir")
-        if outdir:
-            try:
-                os.makedirs(outdir, exist_ok=True)
-                print(f"[ok] output_dir writable: {outdir}")
-            except Exception as e:
-                print(f"[FAIL] output_dir not writable: {outdir}: {e}")
-                ok = False
+        if server_root:
+            if os.path.isdir(server_root) and os.access(server_root, os.R_OK):
+                print(f"[ok] server output root readable (read-only, no local write): {server_root}")
+            else:
+                print(f"[warn] server output root not readable: {server_root} "
+                      f"(ComfyUI still writes there; path report may be relative)")
+        else:
+            outdir = cfg.get("output_dir")
+            if outdir:
+                try:
+                    os.makedirs(outdir, exist_ok=True)
+                    print(f"[ok] output_dir writable: {outdir}")
+                except Exception as e:
+                    print(f"[FAIL] output_dir not writable: {outdir}: {e}")
+                    ok = False
     else:
         print(f"[ok] ComfyUI reachable ({len(ck)} checkpoints, " +
               f"{len(list_models(base, 'lora_name', 'LoraLoader'))} LoRAs).")
@@ -121,6 +130,8 @@ def cmd_scaffold(args, base):
         "steps": args.steps, "cfg": args.cfg,
         "sampler": args.sampler, "scheduler": args.scheduler, "denoise": args.denoise,
         "start_cmd": getattr(args, "start_cmd", None) or "",
+        "server_out": bool(getattr(args, "server_out", False)),
+        "server_output_dir": "",
         "output_dir": args.output_dir,
         "prefix": args.prefix or f"{args.name or 'pipeline'}/pipeline",
         "prompts": [] if args.prompts is None else [{"name": f"p{i+1}", "prompt": p.strip()}
@@ -199,6 +210,35 @@ def download(base, outdir, img):
     with open(dest, "wb") as f: f.write(data)
     return dest
 
+def seq_next(server_root, sub, base_name):
+    """Next sequential number for <base_name>_NNN, read from the SERVER's output folder (read-only).
+
+    Mirrors pipeline_twopass.py: the script never writes here; it only reads to
+    pick the next sequence number. ComfyUI appends its own counter on save.
+    """
+    if not server_root:
+        return 1
+    d = os.path.join(server_root, (sub or "").strip("/"))
+    mx = 0
+    try:
+        for b in os.listdir(d):
+            m = re.match(rf"{re.escape(base_name)}_(\d+)", b)
+            if m:
+                mx = max(mx, int(m.group(1)))
+    except (FileNotFoundError, NotADirectoryError):
+        pass
+    return mx + 1
+
+def server_path(server_root, img):
+    """Report where the ComfyUI server saved an image (read-only; no local write)."""
+    sub = img.get("subfolder", "") or ""
+    fn = img["filename"]
+    rel = os.path.join(sub, fn) if sub else fn
+    if server_root:
+        p = os.path.join(server_root, rel)
+        return p if os.path.exists(p) else f"{p}  (not found yet — check the server output root)"
+    return f"{rel}  (relative to ComfyUI's output dir)"
+
 def resolve_prompts(cfg, prompt, names):
     base = cfg.get("positive", "")
     if prompt is not None:
@@ -224,8 +264,17 @@ def resolve_prompts(cfg, prompt, names):
 
 def run(base, args, cfg):
     w, h = cfg.get("width", 832), cfg.get("height", 1216)
-    outdir = cfg["output_dir"]; os.makedirs(outdir, exist_ok=True)
-    prefix = cfg.get("prefix", cfg.get("name", "pipeline"))
+    server_root = args.server_out or cfg.get("server_output_dir")
+    direct = bool(server_root)
+    outdir = cfg.get("output_dir")
+    if not direct:
+        os.makedirs(outdir, exist_ok=True)
+    base_name = cfg.get("name", "pipeline")
+    sub = (args.server_sub or cfg.get("server_sub") or base_name).strip("/")
+    seq = seq_next(server_root, sub, base_name) if direct else 1
+    if direct:
+        log(f"direct mode: no local write; server saves under {os.path.join(server_root, sub)} (next seq {seq:03d})")
+    prefix = cfg.get("prefix", base_name)
     base_positive = cfg.get("positive", "")
     names_list, prompt_list = resolve_prompts(cfg, args.prompt, args.names)
     def pos_for(t): return ", ".join(x for x in (base_positive, t) if x)
@@ -236,8 +285,13 @@ def run(base, args, cfg):
         base_seed = (basis + idx * 100000) if args.seed_basis is not None else random.randrange(1, 2**31 - 1)
         for k in range(args.count):
             seed = base_seed + k
+            if direct:
+                jprefix = f"{sub}/{base_name}_{seq:03d}"
+                seq += 1
+            else:
+                jprefix = f"{prefix}/{name}_{seed}"
             jobs.append({"name": name, "k": k + 1, "count": args.count, "seed": seed, "pos": pos,
-                         "prefix": f"{prefix}/{name}_{seed}", "w": w, "h": h})
+                         "prefix": jprefix, "w": w, "h": h})
     ids = []
     for j in jobs:
         resp = api(base, "/prompt", {"prompt": build_graph(cfg, j["pos"], j["seed"], j["prefix"], j["w"], j["h"], args.init, args.denoise),
@@ -268,7 +322,11 @@ def run(base, args, cfg):
                     failures.append(pid); log(f"[error] pid={pid} finished with no output")
                 pending.discard(pid); continue
             for nid, out in outs.items():
-                for img in out.get("images", []): log(f"SAVED: {download(base, outdir, img)}")
+                for img in out.get("images", []):
+                    if direct:
+                        log(f"SAVED(server): {server_path(server_root, img)}")
+                    else:
+                        log(f"SAVED: {download(base, outdir, img)}")
             pending.discard(pid)
         time.sleep(4)
     if pending:
@@ -287,6 +345,10 @@ def main():
     ap.add_argument("--host", default=DEFAULT_HOST)
     ap.add_argument("--port", type=int, default=None)
     ap.add_argument("--seed-basis", type=int, default=None)
+    ap.add_argument("--server-out", default=None,
+                    help="ComfyUI server output ROOT; enables direct-to-server output (no local download)")
+    ap.add_argument("--server-sub", default=None,
+                    help="subfolder under --server-out (default: config name)")
     # onboarding modes
     ap.add_argument("--discover", action="store_true")
     ap.add_argument("--check", action="store_true")
@@ -323,7 +385,7 @@ def main():
             raise SystemExit("--scaffold requires --model and --output-dir")
         cmd_scaffold(args, base); return
     if args.check:
-        cmd_check(base, args.config); return
+        cmd_check(base, args.config, args.server_out); return
     if not args.config:
         raise SystemExit("--config is required to run (or use --discover/--scaffold/--check)")
     cfg = json.load(open(args.config, encoding="utf-8"))
