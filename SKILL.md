@@ -50,6 +50,69 @@ description: Help a user configure a ComfyUI workflow and generate good prompts 
 - 垫图改图：`--init <basename>` + `--denoise`（先把参考图放进 ComfyUI `input` 目录）。
 - 不满意：换 `--seed-basis` / 改 prompt / 增细节再跑。
 
+## 输入参数（描述范式 · 供 agent 填写）
+
+**填写规则（先读）**
+- **只有 agent 填参数，用户只说话**。能从 `--discover`/环境推断的（模型名、端口）**不要问用户**。
+- **必填缺失就追问**（`--model`、`--output-dir`）；**可选项一律取默认，不要问**。
+- **枚举只能用 `--discover` 列出的值**（模型/LoRA 文件名须完全一致）。
+- **互斥**：`--prompt` 与 `--names` 二选一；`--server-out`（直写、不下载）与本地 `output_dir` 下载模式二选一。
+- **格式**：路径原样传；`--width/--height` 取 8 的倍数；prompt 用 danbooru 标签风格（Illustrious 系）；多 prompt 用 `|` 分隔。
+- 改完脚本先 `--dry-run` 干跑验证（`pipeline_twopass.py`）。
+
+### 模式开关（互斥，选一个）
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `--discover` | flag | 列出 ComfyUI 可用底模/LoRA（首次 onboarding） |
+| `--scaffold` | flag | 生成配置 JSON（需 `--model`、`--output-dir`） |
+| `--check` | flag | 自检（可达 / 模型存在 / 输出可写） |
+| `--start` | flag | 拉起 ComfyUI 并等待就绪（**须先经用户同意**；用 `--start-cmd` 或配置 `start_cmd`） |
+| （默认） | — | 出图，需 `--config` |
+
+### A. 配置参数（配 `--scaffold` 用）
+| 参数 | 类型 | 必填 | 默认 | 含义 / 何时用 |
+|---|---|---|---|---|
+| `--model` | str | ✅ | — | 底模文件名，取值必须来自 `--discover` |
+| `--lora` | str | ✖ | null | 角色/风格 LoRA，可省 |
+| `--lora-strength` | float | ✖ | 0.9 | LoRA 强度；参考图流程可降到 0.4–0.6 |
+| `--name` | str | ✖ | demo | 输出名（直写模式下也作默认子目录名） |
+| `--output-dir` | str | ✅ | — | 下载模式保存目录；直写模式可忽略 |
+| `--width` / `--height` | int | ✖ | 832 / 1216 | 尺寸（宽景 1344×768），8 的倍数 |
+| `--steps` / `--cfg` | int / float | ✖ | 28 / 6.5 | 采样步数 / CFG |
+| `--sampler` / `--scheduler` | str | ✖ | dpmpp_2m / karras | 采样器 / 调度器 |
+| `--positive` / `--negative` | str | ✖ | 内置 | 正 / 负 prompt 基础 |
+| `--prompts` | str | ✖ | 空 | `a|b` 预填命名 prompt |
+| `--start-cmd` | str | ✖ | 空 | ComfyUI 启动命令（供 `--start`） |
+| `--config` | str | ✅ | — | 写出的配置路径 |
+
+### B. 出图参数（`--config` 模式）
+| 参数 | 类型 | 默认 | 含义 / 何时用 |
+|---|---|---|---|
+| `--config` | str | 必填 | 配置 JSON |
+| `--count` | int | 3 | 每个 prompt 出几张 |
+| `--prompt` | str | null | 临时 prompt（`|` 分隔多个） |
+| `--names` | str | null | 只跑 config 里的命名 prompt（逗号分隔）；与 `--prompt` 互斥 |
+| `--init` | str | null | 参考图文件名（须在 ComfyUI `input` 目录）→ img2img |
+| `--denoise` | float | 1.0 | img2img 重绘强度（配 `--init`，常用 0.4–0.7） |
+| `--seed-basis` | int | 随机 | 复现基准：种子 = `basis + 序号*100000 + k` |
+| `--server-out` | str | null | **服务端输出根** → 直写模式：只读目录拿序号、跳过下载（不写工作区外） |
+| `--server-sub` | str | config.name | 直写模式的子目录 |
+| `--host` / `--port` | str / int | 127.0.0.1 / 探 8188,8189 | 远程实例 |
+
+### C. `pipeline_twopass.py` 追加参数（详见 `AGENTS.md`）
+| 参数 | 说明 |
+|---|---|
+| `--pick random\|cycle` | `{a\|b\|c}` 分支抽选（`cycle` = 每个分支都出现） |
+| `--seed-fixed` | 所有 prompt 共用同一 seed（锁定布局；做对照必须加） |
+| `--no-face` / `--no-hand` | 关闭面部 / 手部精修 |
+| `--upscale` / `--upscale-width N` | RealESRGAN 放大 |
+| `--face-denoise` / `--hand-denoise` | 精修重绘强度 |
+| `--seq` | 非直写模式把下载件重命名为 `<name>_NNN.png` |
+| `--dry-run` | 只打印不提交 |
+
+### 机器可读契约
+配置字段的约束见 `config.schema.json`（JSON Schema）；agent 可用它校验 / 补全配置。
+
 ## 关键能力
 - **文生图/图生图**、**批量+轮询**（`/queue`、`/history/<pid>`）、**下载到 output_dir**、**失败/超时非零退出**、`POST /queue {"clear":true}` 取消。
 - **远程**：`--host/--port` 指向本地或远程实例。
