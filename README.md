@@ -1,116 +1,119 @@
 # auto-comfy-draw
 
-[中文](README.md) | [English](README.en.md)
+[English](README.en.md)
 
-<p>
-  <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green.svg">
-  <img alt="Python" src="https://img.shields.io/badge/Python-3.7%2B-blue.svg">
-  <img alt="Backend: ComfyUI" src="https://img.shields.io/badge/Backend-ComfyUI-8A2BE2.svg">
-</p>
+**用自然语言驱动 ComfyUI：从画面描述，到提示词、工作流和批量出图。**
 
-一个 **agent skill**，用来驱动本地或远程的 **ComfyUI**，做**文生图 / 图生图**。
+auto-comfy-draw 是一个供 AI agent 使用的 skill。你描述想要的画面，agent 按照 skill 的指引选择已有模型、组织提示词、配置参数，再通过 Python 驱动 ComfyUI 生成图片。它也可以作为独立命令行工具使用。
 
-你只需描述想要的画面，这个 skill 会帮你配好 ComfyUI 工作流、写好 prompt、批量出图并返回成品。**配置驱动、内容中立**——prompt 想写什么完全由你决定。
+适合已经有 ComfyUI 和模型，希望通过对话完成出图、批量变体和反复调整的人。Python 驱动只使用标准库，实际推理由连接的 ComfyUI 服务执行。
 
-**示例输出**（由本流水线生成）：
+## 你可以这样使用
 
-<img src="examples/example_output.png" width="480" alt="example output">
+- “画一张傍晚的城市天际线，横构图，出 4 张。”
+- “沿用上次的模型和 LoRA，换一组种子再出 3 张。”
+- “把这张参考图改成水彩风格，尽量保留原来的构图。”
+- “同一套参数分别试红色和蓝色的小鸟，各出 2 张。”
+- “用脸部和手部精修流程生成这组人物图。”
 
-> 时雨绮罗生日快乐！🎂
+agent 负责命令和 JSON 配置，优先复用已确认的偏好，只在缺少关键信息时追问。参考图需要先放入服务端的 input 目录；主体保真和构图保留程度仍取决于模型、提示词及重绘强度。
 
----
+## 它如何运作
 
-## 这是什么
-
-- **`SKILL.md`** — skill 入口（frontmatter `name`/`description`）。由你的 agent 加载，让它知道怎么搭建工作流、替你生成 prompt。
-- **`pipeline.py`** — 与 harness 无关的 Python 驱动。读取配置 JSON，提交 txt2img/img2img 任务，轮询 ComfyUI，下载结果，并上报错误。
-- **`AGENTS.md`** — 面向会自动读取工作目录 `AGENTS.md` 的 harness 的同一套流程。
-
-## 环境要求
-
-- Python 3.7+
-- 一个在运行的 **ComfyUI**（本地或远程），并已装好你的模型 / LoRA。
-- `pipeline.py` 只调用 ComfyUI 的 HTTP API（`/prompt`、`/queue`、`/history`、`/view`），无其他依赖。
-
-## 安装为 agent skill
-
-本仓库以 **`SKILL.md`** skill 的形式打包，"安装"取决于你 agent 的 skill 机制：
-
-1. **DSH / Anthropic 兼容 loader** — 把这个仓库（或只需 `SKILL.md` + `pipeline.py` + `config.example.json`）放进你 harness 扫描 skill 的目录。`SKILL.md` 的 frontmatter（`name: auto-comfy-draw`、`description`）就是注册入口，agent 会据此匹配请求。
-2. **会自动读取 `AGENTS.md` 的 harness** — 把本仓库的 `AGENTS.md` 拷到你的项目/工作区根目录；它会自动注入 agent 上下文，指示 agent 使用这套流程。
-3. **直接当 CLI 用** — `pipeline.py` 本身是个命令行工具，不依赖任何 agent 也能跑。
-
-> 具体的 skill 目录路径因 harness 而异——请查阅你所用 agent 的文档，确认 `SKILL.md` 从哪里加载。
-> 本仓库已 gitignore `config*.json`（仅保留 `config.example.json`），你的真实配置留在本地。
-
-## 快速开始
-
-```bash
-# 1. 看看 ComfyUI 实际能用什么
-python pipeline.py --discover
-
-# 2. 根据你的选择生成配置（模型 / LoRA / 输出目录）
-python pipeline.py --scaffold --model sdxl_foo.safetensors --lora bar.safetensors \
-    --output-dir D:/my_imgs --name demo --config config.demo.json
-
-# 3. 自检（ComfyUI 可达？模型在不在？输出目录可写？）
-python pipeline.py --check --config config.demo.json
-
-# 4. 出图
-python pipeline.py --config config.demo.json --prompt "a city at dusk" --count 4
+```mermaid
+flowchart LR
+    A[用户描述画面] --> B[Agent 理解需求并读取 skill]
+    B --> C[发现资源、组织提示词、生成配置]
+    C --> D[Python 构建和预检工作流]
+    D --> E[ComfyUI 排队执行]
+    E --> F[保存图片、返回路径]
+    F --> G[Agent 看图检查并交付]
+    G -->|按需求调整| C
 ```
 
-## 怎么对 agent 开口（推荐 prompt）
+这里有三个分工明确的部分：
 
-用户**只对话，不用敲任何命令行**。`--discover` / `--scaffold` 等命令由 agent 在底层执行。你可以直接说：
-
-- "帮我画一张傍晚的城市天际线"
-- "用 waiIllustriousSDXL 和 xxx LoRA 画一只猫在屋顶，输出到 D:/my_imgs，出 4 张"
-- "把这张 ref.png 改得更写实一点"（img2img）
-- "换个种子 / 再来 4 张 / 加点细节"
-
-| 你说的话 | agent 会做 |
+| 部分 | 负责什么 |
 |---|---|
-| "帮我画一张 <描述>"（首次） | 扫描可用模型 → 问你模型/LoRA/输出/是否垫图 → 生成配置 → 自检 → 出图 |
-| "用 <模型> <lora> 画 <描述>" | 直接生成配置，用你的描述跑图 |
-| "把这张图改成 <风格>" | 图生图（`--init` + `--denoise`） |
-| "换个种子 / 加细节" | 调 `--seed-basis` / `--count` 重跑 |
+| **Skill 与 agent** | 理解需求，选择参数和执行路径，撰写提示词，在具备图像查看能力时检查结果 |
+| **Python 驱动** | 解析配置和提示词，派生种子，构建节点图，调用 HTTP API，跟踪任务并处理输出 |
+| **ComfyUI 服务** | 加载模型和 LoRA，在其运行设备上采样、精修、放大并保存图片 |
 
-> 描述得越清楚（主体 / 风格 / 构图 / 是否垫图），出图越贴近你想要；不用记任何命令行。
+一次典型执行会经过以下步骤：
 
-## 命令
+1. **发现资源**：探测服务是否可达，通过节点信息读取可用底模和 LoRA 文件名。
+2. **配置画面**：复用已有 JSON 或生成新配置，设置模型、基础提示词、画面描述、尺寸和采样参数。
+3. **规划批次**：展开提示词分支，为每张图片确定种子和输出前缀，构建 ComfyUI API 格式的工作流。
+4. **检查与提交**：离线 `--dry-run` 可预览全部任务；在线 `--check` 检查节点和资源。实际生成也会自动预检，然后逐项提交到 `/prompt`。
+5. **等待与取图**：按返回的任务 ID 轮询 `/history/<prompt_id>`，下载图片或报告服务端保存路径。失败、输出缺失或超时返回非零退出状态。
+6. **检查与迭代**：agent 根据原始要求检查图片，必要时在约定的数量和范围内调整提示词或种子。图像质量检查由 agent 完成，驱动本身不包含视觉评分器。
 
-| 模式 | 作用 |
-|---|---|
-| `--discover` | 列出 ComfyUI 当前暴露的底模与 LoRA。 |
-| `--scaffold --model <m> [--lora <l>] --output-dir <dir> [--name <n>] [--config <c>] [--prompts "a\|b"]` | 写出配置 JSON。 |
-| `--check [--config c]` | 自检（ComfyUI 可达、模型存在、输出目录可写）。 |
-| `--start [--start-cmd "<cmd>"]` | 拉起 ComfyUI 并等待就绪（**仅在征得用户同意后**）。 |
-| `--config c --count N [--prompt ...] [--names a,b] [--init ref.png --denoise 0.6] [--seed-basis N] [--host/--port]` | 批量出图。 |
+## 能做什么
 
-批量行为：探活端口(8188/8189) → 全部入队 → 轮询 `/queue` + `/history/<pid>` → 下载到 `output_dir` → 失败/超时**非零退出**。取消批量：`POST /queue {"clear": true}`。
+| 能力 | `pipeline.py` | `pipeline_twopass.py` |
+|---|---|---|
+| 文生图、单个可选 LoRA、批量生成 | 支持 | 支持 |
+| 命名提示词、分支抽选、种子控制 | 支持 | 支持 |
+| 图生图 | 支持 `--init` / `--denoise` | — |
+| 脸部与手部精修、可选模型放大 | — | 支持 |
+| 离线干跑、在线预检 | 支持 | 支持 |
+| 下载到客户端或保留服务端输出 | 支持 | 支持 |
+| 资源发现、生成配置、启动服务 | 支持 | 使用基础脚本 |
 
-## Prompt 与配置
+基础工作流是 **底模 → 可选 LoRA → 文本编码 → 采样 → 解码 → 保存**。图生图通过读取并编码参考图提供初始 latent；精修工作流则在解码后追加脸部、手部处理和可选放大。
 
-`--prompt` 接收 prompt 字符串；**多个 prompt 用 `|` 分隔**。`--names a,b` 跑配置里的命名 prompt。
+两份驱动共用提示词解析和配置校验。twopass 默认开启脸部和手部精修，需要对应节点及模型；可用 `--no-face`、`--no-hand` 关闭。
 
-`config.example.json` 字段：`name`、`model`、`lora`/`lora_strength`、`positive`、`negative`、`width/height`、`steps/cfg/sampler/scheduler/denoise`、`start_cmd`、`output_dir`、`prefix`、`prompts`。
+## 环境与接入
 
-- **图生图**：`--init <basename>` + `--denoise N`（把参考图放进 ComfyUI 的 `input` 目录）。
-- **可复现**：`--seed-basis N` → 每个 prompt 种子 = `N + 序号*100000 + k`。
-- **远程**：`--host/--port` 指向转发/隧道后的 ComfyUI，结果会拉回 `output_dir`。
+- **Python 3.7+**；驱动无额外 Python 包依赖。
+- **可访问的 ComfyUI HTTP 服务**，位于本机或远程设备，并已安装所需模型。
+- **可执行本地命令的 agent**，用于对话式操作；看图质检还需图像查看能力。
+- 精修需要 **Impact Pack 相关节点及检测模型**，放大需要对应放大模型。详见 [精修说明](docs/TWOPASS.md)。
 
-## 自动启动 ComfyUI（需经同意）
+现有工作流面向 `CheckpointLoaderSimple`、CLIP、VAE 和 KSampler 这条加载与采样路径，默认参数偏向 SDXL / Illustrious。模型能出现在资源列表中，不代表它与工作流或 LoRA 架构相容；使用其他架构时应先确认其加载方式。
 
-如果 ComfyUI 没在运行，`--discover`/`--check` 会给出明确报错。你可以**让 agent 帮你启动**，但**必须先经你同意**：
+**作为 skill 使用**：将本工具目录放入所用 agent 支持的 skill 发现目录，保留 `SKILL.md`、三份 Python 模块、`config.schema.json`、示例配置和 `docs/`。也可以在项目 `AGENTS.md` 中指向本目录的 `SKILL.md`，按需读取。
 
-- 先征求同意；你同意后执行 `python pipeline.py --start --start-cmd "<comfyui 启动命令>"`（或在配置里设 `start_cmd`）。它最多等待 120 秒轮询 `/system_stats`。
-- agent **绝不会在未经你同意时自动启动**；你不同意或启动失败时，就自己启动 ComfyUI 再重跑。
+**文件如何分工**：`SKILL.md` 维护出图流程；`AGENTS.md` 维护项目约定；工作区级说明记录本机地址、路径和偏好。详细参数集中在 [运行参考](docs/USAGE.md)。
 
-## License
+## 命令行快速开始
 
-MIT（见 `LICENSE`）。本仓库仅含工具/文档，不含任何生成的图像或第三方素材。
+以下命令在本工具目录执行。将 `model.safetensors` 替换为 discover 返回的实际模型文件名；`./output` 是允许客户端写入的示例位置。
 
-## 示例输出
+```text
+python pipeline.py --discover
+python pipeline.py --scaffold --model model.safetensors --output-dir ./output --name city --prompts "a city skyline at dusk" --config config.city.json
+python pipeline.py --config config.city.json --count 1 --seed-basis 42 --dry-run
+python pipeline.py --config config.city.json --count 1 --seed-basis 42 --check
+python pipeline.py --config config.city.json --count 1 --seed-basis 42
+```
 
-可在 [examples/example_output.png](examples/example_output.png) 查看由本流水线生成的一张示例图。
+`--dry-run` 不连接服务、不创建输出目录、不提交任务，打印全部 jobs 和 graphs。`--check` 连接服务但不出图；下载模式会用临时文件验证目录写入。scaffold 会写入指定配置文件，运行前应确认目标文件可覆盖。
+
+需要批量变体时，例如：
+
+```text
+python pipeline.py --config config.city.json --prompt "a {red|blue} bird" --count 2 --pick cycle --seed-basis 42
+```
+
+这会按顺序生成红色、蓝色各一张。顶层 `|` 分隔不同 prompt，花括号内的 `|` 表示选项；`cycle` 逐组轮转，不会自动枚举多组之间的全部组合。
+
+## 输出与复现
+
+默认由 ComfyUI 保存图片，再通过 `/view` 下载到配置中的 `output_dir`。若希望保留服务端文件并跳过下载，使用 `--server-out <服务端实际输出根>`。该参数用于路径报告和编号读取，不会改变 ComfyUI 的输出设置；twopass 的直写编号要求客户端能读取该根目录。
+
+脚本打印基准种子、排队任务 ID 和保存路径。复现时保留配置、展开后的提示词、种子及相关环境信息。`--seed-fixed` 可以让不同 prompt 共用基准种子，但不保证构图或像素完全相同。
+
+超时或中途提交失败后，已排队任务可能继续执行，应根据任务 ID 检查状态后再决定补交。在线预检检查的是节点与参数条件，不保证显存足够或成品达到预期画质。
+
+## 文档与开发
+
+- [运行参考](docs/USAGE.md)：参数、输出模式、分支语法和兼容性。
+- [精修与实验说明](docs/TWOPASS.md)：依赖、精修开关和复现边界。
+- [提示词经验](docs/PROMPT_ENGINEERING.md)：特定底模与角色 LoRA 的项目观测。
+- [配置示例](config.example.json) / [配置契约](config.schema.json)。
+
+从仓库目录运行测试：`python -B -m unittest discover -s tests -v`。个人配置和本地工作产物通过 `.gitignore` 排除，示例配置和配置契约随仓库维护。
+
+[示例图片](examples/example_output.png) · [MIT License](LICENSE)

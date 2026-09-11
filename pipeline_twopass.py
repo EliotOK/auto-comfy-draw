@@ -20,10 +20,14 @@ block (every field has a default, so existing configs work unchanged):
 
 All passes live in ONE /prompt submission per image (no file round-trip).
 Detailer seeds are derived from the image seed (seed+1 face, seed+2 hand), so a
-given --seed-basis reproduces the whole two-pass chain exactly.
+given --seed-basis records the seeds of the whole chain; pixel identity is not guaranteed.
 Content-neutral: all prompt text comes from the config or the CLI.
 """
 import argparse, json, os, random, re, sys, time, urllib.parse, urllib.request
+
+from pathlib import Path
+from pipeline_common import (resolve_prompts, split_prompts, expand_prompt, normalize_config,
+                             validate_run, check_output, preflight, validate_graphs)
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORTS = (8188, 8189)
@@ -116,32 +120,8 @@ def detail_cfg(cfg, args):
     if args.face_denoise is not None: face["denoise"] = args.face_denoise
     if args.hand_denoise is not None: hand["denoise"] = args.hand_denoise
     if args.upscale_width is not None: up["target_width"] = args.upscale_width
+    normalize_config(dict(cfg, detail={"face": face, "hand": hand, "upscale": up}))
     return face, hand, up
-
-
-def resolve_prompts(cfg, prompt, names):
-    base = cfg.get("positive", "")
-    if prompt is not None:
-        return [("p%d" % (i + 1)) for i in range(len(prompt.split("|")))], \
-               [p.strip() for p in prompt.split("|") if p.strip()]
-    cfg_prompts = cfg.get("prompts", [])
-    if names is not None:
-        wanted = [n.strip() for n in names.split(",")]
-        picks = []
-        for s in cfg_prompts:
-            if isinstance(s, dict):
-                if s.get("name") in wanted: picks.append((s["name"], s["prompt"]))
-            else:
-                if s in wanted: picks.append((s, s))
-        if not picks: raise SystemExit("--names not found: %s" % wanted)
-        return [n for n, _ in picks], [p for _, p in picks]
-    if not cfg_prompts:
-        return ["default"], [base]
-    ns, ps = [], []
-    for s in cfg_prompts:
-        if isinstance(s, dict): ns.append(s["name"]); ps.append(s["prompt"])
-        else: ns.append(s); ps.append(s)
-    return ns, ps
 
 
 def build_graph(cfg, pos, seed, prefix, w, h, face, hand, up):
@@ -246,29 +226,34 @@ def build_graph(cfg, pos, seed, prefix, w, h, face, hand, up):
     return g, passes
 
 
-def seq_next(server_out, sub, base):
-    """Next <base>_NNN number, read from the SERVER's output folder (read-only).
+def seq_max(d, base):
+    """Largest existing <base>_NNN number in d, or 0.
 
-    FAILS CLOSED: if the folder cannot be enumerated we abort instead of
-    silently restarting at 1, which would overwrite existing images.
+    Padding-agnostic on purpose: ComfyUI's SaveImage appends its own
+    `_00001_` counter to whatever prefix it is given, so the number of
+    zero-padded digits in an on-disk series number is NOT ours to fix. An
+    exact-name probe (`%03d` + `_00001_.png`) therefore never matches what
+    the server actually wrote and silently disables sequence avoidance.
+    Matching any run of digits keeps both spellings (`_001.png`,
+    `_00001_.png`) in one series.
     """
-    d = os.path.join(server_out, sub.strip("/"))
-    if not os.path.isdir(d):
-        raise SystemExit("[abort] server output folder not found: %s\n"
-                         "        refusing to guess the sequence number (would risk overwriting)." % d)
     try:
         names = os.listdir(d)
-    except OSError as e:
-        raise SystemExit("[abort] cannot enumerate %s (%s)\n"
-                         "        refusing to guess the sequence number." % (d, e))
-    if not names:
-        print("[warn] %s is empty -- sequence starts at 1" % d, flush=True)
+    except FileNotFoundError:
+        return 0
+    pat = re.compile(re.escape(base) + r"_(\d+)")
     mx = 0
     for b in names:
-        m = re.match(re.escape(base) + r"_(\d+)", b)
+        m = pat.match(b)
         if m:
             mx = max(mx, int(m.group(1)))
-    return mx + 1
+    return mx
+
+
+def seq_next(server_out, sub, base):
+    """Read the next series number. An absent series under a readable root starts at 1."""
+    os.listdir(server_out)
+    return seq_max(os.path.join(server_out, sub.strip("/")), base) + 1
 
 
 def seq_rename(path, base):
@@ -285,11 +270,15 @@ def seq_rename(path, base):
 
 
 def run(base, args, cfg):
+    cfg = normalize_config(cfg, args.server_out)
+    validate_run(args)
     w, h = cfg.get("width", 832), cfg.get("height", 1216)
-    direct = args.server_out is not None
-    outdir = cfg["output_dir"]
-    if not direct:
-        os.makedirs(outdir, exist_ok=True)
+    args.server_out = cfg.get("server_output_dir")
+    args.server_sub = args.server_sub or cfg.get("server_sub") or cfg.get("name", "pipeline")
+    args.seq_name = args.seq_name or cfg.get("name", "pipeline")
+    direct = bool(args.server_out)
+    outdir = cfg.get("output_dir")
+    # Output directories are checked only after offline planning.
     prefix = args.prefix if args.prefix is not None else cfg.get("prefix", cfg.get("name", "pipeline"))
     next_seq = seq_next(args.server_out, args.server_sub, args.seq_name) if direct else 0
     base_positive = cfg.get("positive", "")
@@ -299,12 +288,13 @@ def run(base, args, cfg):
     def pos_for(t): return ", ".join(x for x in (base_positive, t) if x)
 
     basis = args.seed_basis if args.seed_basis is not None else random.randrange(1, 2 ** 31 - 1)
+    log("SEED_BASIS: %d" % basis)
     jobs = []
     for idx, (name, txt) in enumerate(zip(names_list, prompt_list)):
         raw = pos_for(txt)
+        split_prompts(raw) if raw.strip() else None
         groups = brace_options(raw)
-        bs = (basis + (0 if args.seed_fixed else idx * 100000)) \
-            if args.seed_basis is not None else random.randrange(1, 2 ** 31 - 1)
+        bs = basis + (0 if args.seed_fixed else idx * 100000)
         for k in range(args.count):
             seed = bs + k
             jname, pos = name, raw
@@ -319,14 +309,10 @@ def run(base, args, cfg):
                 if tag:
                     jname = "%s__%s" % (name, tag)
             if direct:
-                # 逐文件 stat 校验：即使目录枚举陈旧，也要跳过已占用的序号
-                while True:
-                    fname = "%s_%03d" % (args.seq_name, next_seq)
-                    probe = os.path.join(args.server_out, args.server_sub.strip("/"), fname + "_00001_.png")
-                    if not os.path.exists(probe):
-                        break
-                    log("[skip] %s already exists -> next number" % os.path.basename(probe))
-                    next_seq += 1
+                # 序号来自一次目录扫描（seq_next），补零位数与磁盘上已有的对齐。
+                # 不要在这里拿拼出来的精确文件名去 exists() 探测：SaveImage 会再补一层
+                # `_00001_` 计数器，拼出来的名字永远对不上，探测恒为假（等于没有避让）。
+                fname = "%s_%05d" % (args.seq_name, next_seq)
                 next_seq += 1
                 jprefix = "%s/%s" % (args.server_sub.strip("/"), fname)
             else:
@@ -335,15 +321,18 @@ def run(base, args, cfg):
             jobs.append({"name": jname, "file": fname, "k": k + 1, "count": args.count, "seed": seed,
                          "pos": pos, "prefix": jprefix})
 
+    built = [build_graph(cfg, j["pos"], j["seed"], j["prefix"], w, h, face, hand, up) for j in jobs]
+    graphs = [g for g, _ in built]
+    validate_graphs(graphs)
     if args.dry_run:
-        g, passes = build_graph(cfg, jobs[0]["pos"], jobs[0]["seed"], jobs[0]["prefix"], w, h, face, hand, up)
-        log("base=%dx%d passes=%s nodes=%d" % (w, h, ",".join(passes) or "none", len(g)))
-        log(json.dumps(g, ensure_ascii=False, indent=2))
+        log(json.dumps({"jobs": jobs, "graphs": graphs}, ensure_ascii=False, indent=2))
         return
-
+    preflight(base, graphs, api)
+    check_output(cfg)
+    if args.check:
+        return
     ids = []
-    for j in jobs:
-        g, passes = build_graph(cfg, j["pos"], j["seed"], j["prefix"], w, h, face, hand, up)
+    for j, (g, passes) in zip(jobs, built):
         resp = api(base, "/prompt", {"prompt": g, "client_id": "auto-comfy-draw-twopass"})
         if "prompt_id" not in resp:
             raise SystemExit("/prompt validation failed: " + json.dumps(resp, ensure_ascii=False)[:1500])
@@ -365,7 +354,10 @@ def run(base, args, cfg):
                 continue
             entry = hist[pid]
             status = entry.get("status") or {}
+            if status.get("status_str") not in ("error", "success", "completed"):
+                continue
             files = []
+            download_failed = False
             for _nid, out in (entry.get("outputs") or {}).items():
                 for im in (out.get("images") or []):
                     if direct:
@@ -381,11 +373,12 @@ def run(base, args, cfg):
                             log("  seq: %s  <- %s" % (os.path.basename(fp), old))
                         files.append(fp)
                     except Exception as e:
+                        download_failed = True
                         log("  ! download failed %s: %s" % (im.get("filename"), e))
             if status.get("status_str") == "error":
                 failures.append(pid)
                 log("  ! %s errored: %s" % (pid, json.dumps(status.get("messages"), ensure_ascii=False)[:400]))
-            elif not files:
+            elif download_failed or not files:
                 failures.append(pid)
                 log("  ! %s produced no image" % pid)
             saved[pid] = files
@@ -420,23 +413,28 @@ def main():
     ap.add_argument("--prefix", default=None, help="override the config prefix/subfolder")
     ap.add_argument("--server-out", default=None,
                     help="ComfyUI server output ROOT; enables direct-to-server output (no local download)")
-    ap.add_argument("--server-sub", default="sparkle",
+    ap.add_argument("--server-sub", default=None,
                     help="subfolder under --server-out; files are written there as <seq-name>_NNN_*.png")
-    ap.add_argument("--seq-name", default="sparkle",
-                    help="base name for sequential output (default sparkle)")
+    ap.add_argument("--seq-name", default=None,
+                    help="base name for sequential output (default config.name)")
     ap.add_argument("--seq", action="store_true",
                     help="rename outputs to <seq-name>_NNN.png, continuing the sequence in the output dir")
     ap.add_argument("--seed-fixed", action="store_true",
-                    help="same seed for every prompt: locks layout/camera so only the prompt varies "
+                    help="shared base seed for every prompt; prompt changes may alter layout "
                          "(use with --count 1 for a true controlled sweep)")
     ap.add_argument("--pick", choices=["random", "cycle"], default="random",
-                    help="how to resolve {a|b|c}: random=seed-derived draw (native-style), cycle=round-robin for guaranteed coverage")
-    ap.add_argument("--dry-run", action="store_true", help="print the graph, submit nothing")
+                    help="how to resolve {a|b|c}: random=seed-derived draw (native-style), cycle=round-robin per group; count must cover the largest group")
+    modes = ap.add_mutually_exclusive_group()
+    modes.add_argument("--dry-run", action="store_true", help="offline batch preview; no writes or submissions")
+    modes.add_argument("--check", action="store_true", help="online preflight; submit nothing")
     args = ap.parse_args()
+    if args.upscale and args.no_upscale:
+        ap.error("--upscale and --no-upscale are mutually exclusive")
 
-    cfg = json.load(open(args.config, encoding="utf-8"))
-    base = probe(args.host, args.port)
-    log("using " + base)
+    cfg = json.loads(Path(args.config).read_text(encoding="utf-8"))
+    base = None if args.dry_run else probe(args.host, args.port)
+    if base:
+        log("using " + base)
     run(base, args, cfg)
 
 

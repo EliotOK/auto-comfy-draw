@@ -1,127 +1,31 @@
 ---
 name: auto-comfy-draw
-description: Help a user configure a ComfyUI workflow and generate good prompts without writing them by hand, then batch-run text-to-image or image-to-image and deliver outputs. The user describes the desired image; this skill handles scanning available models/LoRAs, building a config, writing prompts, and running.
+description: Configure and run an existing local or remote ComfyUI service for text-to-image, image-to-image, batch variations and optional detail passes. Use when the user requests ComfyUI generation or work on this pipeline.
 ---
 
-# ComfyUI 一键绘图助手（auto-comfy-draw）
+# ComfyUI 出图
 
-帮用户把"想画什么"变成"做好的图"：**配工作流 + 写 prompt + 批量出图**，用户不碰 JSON、不手写复杂提示词。
+把用户的画面描述转成配置、提示词和成品图。脚本与本文件同目录；从其他目录调用时使用脚本绝对路径。命令和配置由 agent 处理。
 
-## 用户怎么开口（推荐 prompt）→ agent 怎么接
-用户**只对话，不打 CLI**。`--discover` / `--scaffold` 等命令是**你（agent）在底层执行的**，把用户的话翻译成动作：
+## 决策与执行
 
-| 用户开口 | 你该做的 |
-|---|---|
-| "帮我画一张 <描述>"（首次） | `--discover` 列可用模型 → 问模型/LoRA/输出/尺寸/是否垫图 → `--scaffold` 生成配置 → `--check` → 跑图 |
-| "用 <模型> <lora> 画 <描述>"（已给信息） | 直接 `--scaffold` 或复用已有 config，`--prompt` 跑图 |
-| "把这张/垫图改成 <风格>"（img2img） | `--init <参考图文件名> --denoise N` 跑图 |
-| "换个种子 / 再来 N 张 / 加点细节" | 改 `--seed-basis` / `--count` / 改 prompt 重跑 |
-| "别让我写 prompt；我不知道怎么写" | 你代他组织 prompt（按 config `positive`/`negative` 结构） |
-| "输出到 <目录> / 用某个模型" | 更新 config（`--scaffold` 或改 `output_dir`/`model`）再跑 |
+1. 优先复用用户已确认的模型、输出位置和画面偏好；读取项目 `AGENTS.md` 获取本机环境。只追问无法合理推断且影响结果的信息，不要求用户审阅 JSON。
+2. 首次使用或资源变化时运行 `pipeline.py --discover`。它返回文件列表，不证明模型架构与 LoRA 相容；本工作流面向 `CheckpointLoaderSimple` / CLIP / VAE / KSampler 路径，默认参数偏向 SDXL / Illustrious。按模型选择提示词风格。
+3. 复用或用 `pipeline.py --scaffold` 建立配置。运行参数与输出规则见 [运行参考](docs/USAGE.md)。精修使用 `pipeline_twopass.py`；图生图使用 `pipeline.py --init <input文件名> --denoise <强度>`。两者能力不同，精修脚本默认启用脸部和手部处理。
+4. 新配置或修改脚本后用选定脚本 `--dry-run` 离线检查全部任务、展开提示词和种子；实际运行自动在线预检，也可先 `--check`。离线检查不证明服务端节点可执行，在线预检不保证显存足够或最终画质。
+5. 跑图后查看结果，按用户要求检查主体、数量、构图、身份和明显伪影；交付可打开的图片及路径。修改时保留足以追溯的配置、种子和任务 ID，只在授权的数量与范围内迭代。
 
-**推荐开场白（用户可说）**：
-- "帮我画一张傍晚的城市天际线"
-- "用 waiIllustriousSDXL 和 xxx LoRA 画一只猫在屋顶，输出到 D:/my_imgs，出 4 张"
-- "把这张 ref.png 改得更写实一点"
+## 操作边界
 
-你收到后**一步步走 onboarding**，而不是叫用户去敲命令行。
+- 服务不可达时先确认端口和连接状态。需要启动服务时，已有启动授权继续有效；授权不明确时只确认启动操作，不反复确认已选模型和配置。使用已知启动命令，远程连接失败不应拉起本地实例。
+- 参考图需已在服务端 input 目录；核实文件后再运行，不能把客户端任意路径直接当作服务端文件名。
+- `--server-out` 表示服务端现有输出根，用于只读编号与路径报告，不会改变 ComfyUI 的输出设置。客户端下载只能写当前允许的目录；服务端输出必须属于用户授权的生成范围。
+- 不自动重试提交失败或超时的整个批次：部分任务可能仍在运行。根据已返回的 prompt ID 查明状态；取消仅处理本批次已知任务，避免清空共享队列。
+- 固定种子仅控制随机输入，不承诺固定构图或逐像素复现。对照需同时记录展开后的 prompt、配置和种子；`--names` 子集选择仍按选中列表重新编号。
 
-## 第一次上手（onboarding，先做这些）
-0. **ComfyUI 没起？先征求同意**
-   - 若 `--discover`/`--check`/运行报 `ComfyUI not reachable` → **先提醒用户**"ComfyUI 还没启动"。
-   - **征求同意**："要我帮你启动吗？还是允许我以后自动拉起（把启动命令存进配置）？"
-   - 同意 → `python pipeline.py --start --start-cmd '<启动命令>'`（或读配置里已有的 `start_cmd`），等待就绪。
-   - 不同意 / 自动启动失败 → **让用户自己启动**（Desktop 或 `python main.py`），再继续。
-   - ⚠️ **绝不未经同意就拉起**；`--start` 只在你已获用户许可后使用。
-1. **扫描可用资源**：`python pipeline.py --discover` → 列出 ComfyUI 当前能用的**底模**和 **LoRA**（这决定了用户能选什么）。
-   - 若发现预期模型/LoRA 不在列表 → 提示用户**重启 ComfyUI**（新文件启动时才扫入）。
-2. **问清这几个**（一次问完，别让用户写配置）：
-   - 用哪个**底模**（从 `--discover` 结果里挑）？
-   - 要不要 **LoRA**？哪个（可省）？
-   - **输出到哪**（目录）？给个默认建议。
-   - **尺寸 / 风格 / 是否垫图**？一句话描述想要什么？
-3. **生成配置**：`python pipeline.py --scaffold --model <m> [--lora <l>] --output-dir <dir> --name <x> --config config.<x>.json`
-   - 会写出含 `positive/negative/prompts` 的配置；`--prompts "a|b"` 可预填命名 prompt。
-4. **自检**：`python pipeline.py --check --config config.<x>.json` → 确认模型存在、输出目录可写。
-5. **跑图**：`python pipeline.py --config config.<x>.json --count N [--prompt "..."] [--names a,b] [--init ref.png --denoise 0.6] [--seed-basis N]`。
+## 按需参考
 
-## 之后每次用
-- 用户说一句要什么 → 用已有 config，`--prompt` 直接给描述（或 `--names` 挑命名 prompt），跑图。
-- 垫图改图：`--init <basename>` + `--denoise`（先把参考图放进 ComfyUI `input` 目录）。
-- 不满意：换 `--seed-basis` / 改 prompt / 增细节再跑。
-
-## 输入参数（描述范式 · 供 agent 填写）
-
-**填写规则（先读）**
-- **只有 agent 填参数，用户只说话**。能从 `--discover`/环境推断的（模型名、端口）**不要问用户**。
-- **必填缺失就追问**（`--model`、`--output-dir`）；**可选项一律取默认，不要问**。
-- **枚举只能用 `--discover` 列出的值**（模型/LoRA 文件名须完全一致）。
-- **互斥**：`--prompt` 与 `--names` 二选一；`--server-out`（直写、不下载）与本地 `output_dir` 下载模式二选一。
-- **格式**：路径原样传；`--width/--height` 取 8 的倍数；prompt 用 danbooru 标签风格（Illustrious 系）；多 prompt 用 `|` 分隔。
-- 改完脚本先 `--dry-run` 干跑验证（`pipeline_twopass.py`）。
-
-### 模式开关（互斥，选一个）
-| 参数 | 类型 | 说明 |
-|---|---|---|
-| `--discover` | flag | 列出 ComfyUI 可用底模/LoRA（首次 onboarding） |
-| `--scaffold` | flag | 生成配置 JSON（需 `--model`、`--output-dir`） |
-| `--check` | flag | 自检（可达 / 模型存在 / 输出可写） |
-| `--start` | flag | 拉起 ComfyUI 并等待就绪（**须先经用户同意**；用 `--start-cmd` 或配置 `start_cmd`） |
-| （默认） | — | 出图，需 `--config` |
-
-### A. 配置参数（配 `--scaffold` 用）
-| 参数 | 类型 | 必填 | 默认 | 含义 / 何时用 |
-|---|---|---|---|---|
-| `--model` | str | ✅ | — | 底模文件名，取值必须来自 `--discover` |
-| `--lora` | str | ✖ | null | 角色/风格 LoRA，可省 |
-| `--lora-strength` | float | ✖ | 0.9 | LoRA 强度；参考图流程可降到 0.4–0.6 |
-| `--name` | str | ✖ | demo | 输出名（直写模式下也作默认子目录名） |
-| `--output-dir` | str | ✅ | — | 下载模式保存目录；直写模式可忽略 |
-| `--width` / `--height` | int | ✖ | 832 / 1216 | 尺寸（宽景 1344×768），8 的倍数 |
-| `--steps` / `--cfg` | int / float | ✖ | 28 / 6.5 | 采样步数 / CFG |
-| `--sampler` / `--scheduler` | str | ✖ | dpmpp_2m / karras | 采样器 / 调度器 |
-| `--positive` / `--negative` | str | ✖ | 内置 | 正 / 负 prompt 基础 |
-| `--prompts` | str | ✖ | 空 | `a|b` 预填命名 prompt |
-| `--start-cmd` | str | ✖ | 空 | ComfyUI 启动命令（供 `--start`） |
-| `--config` | str | ✅ | — | 写出的配置路径 |
-
-### B. 出图参数（`--config` 模式）
-| 参数 | 类型 | 默认 | 含义 / 何时用 |
-|---|---|---|---|
-| `--config` | str | 必填 | 配置 JSON |
-| `--count` | int | 3 | 每个 prompt 出几张 |
-| `--prompt` | str | null | 临时 prompt（`|` 分隔多个） |
-| `--names` | str | null | 只跑 config 里的命名 prompt（逗号分隔）；与 `--prompt` 互斥 |
-| `--init` | str | null | 参考图文件名（须在 ComfyUI `input` 目录）→ img2img |
-| `--denoise` | float | 1.0 | img2img 重绘强度（配 `--init`，常用 0.4–0.7） |
-| `--seed-basis` | int | 随机 | 复现基准：种子 = `basis + 序号*100000 + k` |
-| `--server-out` | str | null | **服务端输出根** → 直写模式：只读目录拿序号、跳过下载（不写工作区外） |
-| `--server-sub` | str | config.name | 直写模式的子目录 |
-| `--host` / `--port` | str / int | 127.0.0.1 / 探 8188,8189 | 远程实例 |
-
-### C. `pipeline_twopass.py` 追加参数（详见 `AGENTS.md`）
-| 参数 | 说明 |
-|---|---|
-| `--pick random\|cycle` | `{a\|b\|c}` 分支抽选（`cycle` = 每个分支都出现） |
-| `--seed-fixed` | 所有 prompt 共用同一 seed（锁定布局；做对照必须加） |
-| `--no-face` / `--no-hand` | 关闭面部 / 手部精修 |
-| `--upscale` / `--upscale-width N` | RealESRGAN 放大 |
-| `--face-denoise` / `--hand-denoise` | 精修重绘强度 |
-| `--seq` | 非直写模式把下载件重命名为 `<name>_NNN.png` |
-| `--dry-run` | 只打印不提交 |
-
-### 机器可读契约
-配置字段的约束见 `config.schema.json`（JSON Schema）；agent 可用它校验 / 补全配置。
-
-## 关键能力
-- **文生图/图生图**、**批量+轮询**（`/queue`、`/history/<pid>`）、**下载到 output_dir**、**失败/超时非零退出**、`POST /queue {"clear":true}` 取消。
-- **远程**：`--host/--port` 指向本地或远程实例。
-- **可复现**：`--seed-basis N`。
-
-## 给 agent 的提示
-- **别让用户写 prompt/配置**——你替他用 `--discover` 结果问清楚，再 `--scaffold` 生成，交给用户确认即可。
-- 一句话不清，先澄清主体/风格/构图/是否垫图/输出位置，再动手。
-- 交付给 `SAVED:` 路径，主动问是否换 seed / 加细节。
-
-## 可移植性
-`pipeline.py` 只需 Python + 可达的 ComfyUI HTTP API；`SKILL.md` 可被 DSH/Anthropic 式 loader 加载，`AGENTS.md` 供读该文件的 agent。
+- [运行参考](docs/USAGE.md)：模式、输入输出、分支语法、预检与兼容性。
+- [精修与实验说明](docs/TWOPASS.md)：Impact Pack 依赖、顺序输出、对照边界及历史观测。
+- [提示词经验](docs/PROMPT_ENGINEERING.md)：Illustrious / 角色 LoRA 项目经验；设计或诊断提示词时阅读。
+- [配置契约](config.schema.json)：两份驱动共用的字段校验；[示例配置](config.example.json)。

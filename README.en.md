@@ -1,116 +1,117 @@
 # auto-comfy-draw
 
-[中文](README.md) | [English](README.en.md)
+[中文](README.md)
 
-<p>
-  <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green.svg">
-  <img alt="Python" src="https://img.shields.io/badge/Python-3.7%2B-blue.svg">
-  <img alt="Backend: ComfyUI" src="https://img.shields.io/badge/Backend-ComfyUI-8A2BE2.svg">
-</p>
+**Drive ComfyUI with natural language: turn an image description into prompts, workflows and batches of images.**
 
-An **agent skill** that drives a local or remote **ComfyUI** server for text-to-image and image-to-image generation.
+auto-comfy-draw is a skill for AI agents. You describe the image; the agent follows the skill to select existing models, write prompts and configure a Python driver that runs ComfyUI. The drivers can also be used as standalone command-line tools.
 
-You describe the image; the skill configures the ComfyUI workflow, builds the prompt, batch-runs it, and returns the saved outputs. Config-driven and content-neutral — what the prompt describes is entirely up to you.
+It is intended for people who already have ComfyUI and models and want conversational generation, batch variations and iterative adjustments. The Python drivers use only the standard library. Inference runs on the connected ComfyUI service.
 
-**Example output** (produced by this pipeline):
+## What to ask
 
-<img src="examples/example_output.png" width="480" alt="example output">
+- “Generate four wide views of a city skyline at dusk.”
+- “Keep the previous model and LoRA, and try three more seeds.”
+- “Give this reference image a watercolor style while keeping its composition as much as possible.”
+- “Try a red bird and a blue bird with the same settings, two images each.”
+- “Generate this portrait batch with face and hand detail passes.”
 
-> Happy birthday, Shigure Kira! 🎂
+The agent handles commands and JSON, reuses confirmed preferences and asks only for missing information that matters. Reference images must first be placed in the server's input directory. Identity and composition preservation depend on the model, prompt and denoise strength.
 
----
+## How it works
 
-## What this is
-
-- **`SKILL.md`** — the skill entry (frontmatter `name`/`description`), loaded by your agent so it knows how to set up the workflow and generate prompts on your behalf.
-- **`pipeline.py`** — a harness-independent Python driver. It reads a config JSON, submits txt2img/img2img jobs, polls ComfyUI, downloads results, and reports errors.
-- **`AGENTS.md`** — the same workflow for harnesses that auto-read `AGENTS.md` from the working directory.
-
-## Requirements
-
-- Python 3.7+
-- A running ComfyUI (local or remote) with your models/LoRAs installed.
-- `pipeline.py` only calls the ComfyUI HTTP API (`/prompt`, `/queue`, `/history`, `/view`); no other dependencies.
-
-## Install as an agent skill
-
-This is packaged as a **`SKILL.md` skill**, so "install" depends on your agent's skill mechanism:
-
-1. **DSH / Anthropic-compatible loaders** — drop this repo (or just `SKILL.md` + `pipeline.py` + `config.example.json`) into the directory your harness scans for skills. The `SKILL.md` frontmatter (`name: auto-comfy-draw`, `description`) is what registers it, so the agent can invoke it by matching the request.
-2. **Harnesses that auto-read `AGENTS.md`** — copy this repo's `AGENTS.md` into your project/workspace root; it is injected into agent context automatically and instructs the agent to use this workflow.
-3. **Direct use** — `pipeline.py` is just a CLI; you can run it from a terminal without any agent.
-
-> The exact skill-directory path varies by harness — check your agent's docs for where `SKILL.md` files are loaded from.
-> In this repo, `config*.json` is git-ignored (keep only `config.example.json`); your real configs stay local.
-
-## Quick start
-
-```bash
-# 1. See what ComfyUI can actually use
-python pipeline.py --discover
-
-# 2. Generate a config from your choices (model / lora / output dir)
-python pipeline.py --scaffold --model sdxl_foo.safetensors --lora bar.safetensors \
-    --output-dir D:/my_imgs --name demo --config config.demo.json
-
-# 3. Self-check (ComfyUI reachable? model present? output dir writable?)
-python pipeline.py --check --config config.demo.json
-
-# 4. Generate
-python pipeline.py --config config.demo.json --prompt "a city at dusk" --count 4
+```mermaid
+flowchart LR
+    A[Image description] --> B[Agent reads the skill]
+    B --> C[Discover resources, write prompts and config]
+    C --> D[Python builds and checks workflows]
+    D --> E[ComfyUI queues and executes]
+    E --> F[Save images and return paths]
+    F --> G[Agent reviews and delivers]
+    G -->|Requested adjustments| C
 ```
 
-## How to talk to your agent (suggested prompts)
-
-You only **converse** — no need to type any CLI. `--discover` / `--scaffold` etc. are run by the agent under the hood. Just say:
-
-- "Draw a city skyline at dusk"
-- "Use waiIllustriousSDXL with LoRA xxx to draw a cat on a roof, output to D:/my_imgs, 4 images"
-- "Make this ref.png more realistic" (img2img)
-- "Change the seed / give me 4 more / add detail"
-
-| What you say | What the agent does |
+| Component | Responsibility |
 |---|---|
-| "Draw a <description>" (first time) | scan available models → ask model/LoRA/output/ref image → build config → self-check → generate |
-| "Use <model> <lora> to draw <description>" | build config and run with your description |
-| "Change this image into <style>" | img2img (`--init` + `--denoise`) |
-| "Change seed / add detail" | adjust `--seed-basis` / `--count` and re-run |
+| **Skill and agent** | Interpret the request, choose settings and execution path, write prompts, and inspect images when image-viewing tools are available |
+| **Python drivers** | Parse inputs, derive seeds, build node graphs, call HTTP APIs, track jobs and handle output |
+| **ComfyUI service** | Load models and LoRAs, sample, refine, upscale and save images on its execution device |
 
-> The clearer your description (subject / style / composition / reference image), the closer the result. No CLI to memorize.
+A typical run follows these steps:
 
-## Commands
+1. **Discover resources.** Probe the service and read available checkpoint and LoRA filenames from node information.
+2. **Configure the image.** Reuse or generate a JSON config with the model, base prompts, image description, dimensions and sampling settings.
+3. **Plan the batch.** Expand prompt branches, assign seeds and output prefixes, and build ComfyUI API graphs.
+4. **Check and submit.** An offline `--dry-run` previews every job. An online `--check` verifies nodes and resources. Actual runs also preflight their graphs before submitting each job to `/prompt`.
+5. **Wait and collect.** Poll `/history/<prompt_id>` for each submitted job, then download images or report server-side paths. Failures, missing output and timeouts produce a nonzero exit status.
+6. **Review and iterate.** The agent checks images against the request and adjusts prompts or seeds within the agreed scope and image count. Visual quality review belongs to the agent; the driver does not contain a visual scoring model.
 
-| Mode | Purpose |
-|---|---|
-| `--discover` | List the checkpoints & LoRAs ComfyUI currently exposes. |
-| `--scaffold --model <m> [--lora <l>] --output-dir <dir> [--name <n>] [--config <c>] [--prompts "a\|b"]` | Write a config JSON. |
-| `--check [--config c]` | Verify ComfyUI reachable, model exists, output dir writable. |
-| `--start [--start-cmd "<cmd>"]` | Launches ComfyUI and waits until reachable (**only after user consent**). |
-| `--config c --count N [--prompt ...] [--names a,b] [--init ref.png --denoise 0.6] [--seed-basis N] [--host/--port]` | Batch run. |
+## Capabilities
 
-Batch behavior: probe port (8188/8189) → submit all jobs → poll `/queue` + `/history/<pid>` → download to `output_dir` → exit non-zero on failure/timeout. Cancel a batch with `POST /queue {"clear": true}`.
+| Capability | `pipeline.py` | `pipeline_twopass.py` |
+|---|---|---|
+| Text-to-image, one optional LoRA, batches | Yes | Yes |
+| Named prompts, branch selection, seed control | Yes | Yes |
+| Image-to-image | `--init` / `--denoise` | — |
+| Face/hand refinement and optional model upscaling | — | Yes |
+| Offline preview and online preflight | Yes | Yes |
+| Client downloads or server-side output | Yes | Yes |
+| Resource discovery, config scaffolding, service startup | Yes | Use the base driver |
 
-## Prompt & config
+The base workflow is **checkpoint → optional LoRA → text encoding → sampling → decoding → saving**. Image-to-image loads and encodes a reference to supply the initial latent. The detail workflow adds face/hand processing and optional upscaling after decoding.
 
-`--prompt` takes prompt strings; separate **multiple prompts with `|`**. `--names a,b` runs named prompts from the config.
+Both drivers share prompt parsing and config validation. The detail driver enables face and hand passes by default and requires their nodes and models; `--no-face` and `--no-hand` disable them.
 
-`config.example.json` fields: `name`, `model`, `lora`/`lora_strength`, `positive`, `negative`, `width/height`, `steps/cfg/sampler/scheduler/denoise`, `start_cmd`, `output_dir`, `prefix`, `prompts`.
+## Requirements and integration
 
-- **img2img**: `--init <basename>` + `--denoise N` (put the reference image in ComfyUI's `input` dir).
-- **Reproducible**: `--seed-basis N` → per-prompt seed = `N + index*100000 + k`.
-- **Remote**: `--host/--port` to target a forwarded/tunneled ComfyUI; results are pulled back to `output_dir`.
+- **Python 3.7+**, with no additional Python package dependencies for the drivers.
+- **A reachable ComfyUI HTTP service**, local or remote, with the required models installed.
+- **An agent that can execute local commands** for conversational use; image review also requires image-viewing tools.
+- Detail passes require **Impact Pack-related nodes and detection models**. Upscaling requires a corresponding upscale model. See [detail passes](docs/TWOPASS.md).
 
-## Auto-starting ComfyUI (consent-gated)
+The workflows use the `CheckpointLoaderSimple`, CLIP, VAE and KSampler loading and sampling path. Defaults are oriented toward SDXL / Illustrious. A model appearing in discovery does not establish compatibility with this graph or a LoRA; check the loading requirements of other architectures first.
 
-If ComfyUI isn't running, `--discover`/`--check` fail with a clear message. You can **let the agent start it for you**, but only after you agree:
+**Use as a skill:** place the tool folder in a skill discovery directory supported by your agent. Keep `SKILL.md`, all three Python modules, `config.schema.json`, the example config and `docs/`. For project-local use, a project `AGENTS.md` can point to this folder's `SKILL.md` for on-demand reading.
 
-- Ask first; if you consent, run `python pipeline.py --start --start-cmd "<comfyui launch command>"` (or set `start_cmd` in the config). It waits up to 120s for `/system_stats`.
-- The agent must **never** auto-start without your consent; if you decline or it fails, start ComfyUI yourself and re-run.
+**Documentation ownership:** `SKILL.md` defines generation procedures, `AGENTS.md` holds project conventions, and workspace-level guidance records machine-specific addresses, paths and preferences. Detailed parameters live in the [usage reference](docs/USAGE.md).
 
-## License
+## CLI quick start
 
-MIT (see `LICENSE`). This repo contains only tooling/documentation — no generated art or third-party assets.
+Run these commands from the tool directory. Replace `model.safetensors` with an actual checkpoint filename returned by discovery. `./output` is an example directory the client is allowed to write.
 
-## Example output
+```text
+python pipeline.py --discover
+python pipeline.py --scaffold --model model.safetensors --output-dir ./output --name city --prompts "a city skyline at dusk" --config config.city.json
+python pipeline.py --config config.city.json --count 1 --seed-basis 42 --dry-run
+python pipeline.py --config config.city.json --count 1 --seed-basis 42 --check
+python pipeline.py --config config.city.json --count 1 --seed-basis 42
+```
 
-See [examples/example_output.png](examples/example_output.png) for one image produced by this pipeline.
+`--dry-run` prints all jobs and graphs without connecting, creating output directories or submitting jobs. `--check` connects but does not generate images; download mode uses a temporary file to verify directory write access. Scaffolding writes the specified config file, so check whether that destination can be overwritten.
+
+For batch variations:
+
+```text
+python pipeline.py --config config.city.json --prompt "a {red|blue} bird" --count 2 --pick cycle --seed-basis 42
+```
+
+This generates one red bird and one blue bird in order. Top-level `|` separates prompts; pipes inside braces separate options. `cycle` rotates each group and does not enumerate every combination across multiple groups.
+
+## Output and reproducibility
+
+By default, ComfyUI saves images and the driver downloads them through `/view` into the configured `output_dir`. Use `--server-out <actual-server-output-root>` to keep server-side files and skip downloads. This parameter supports path reporting and sequence reads; it does not change ComfyUI's output settings. The detail driver's direct-output numbering requires the client to be able to read that root directory.
+
+Logs include the base seed, queued task IDs and saved paths. Keep the config, expanded prompts, seeds and relevant environment information for reproduction. `--seed-fixed` shares a base seed across prompts but cannot guarantee identical composition or pixels.
+
+Previously queued jobs may continue after a timeout or a partial submission failure. Inspect their IDs before deciding what to resubmit. Online preflight checks nodes and parameters, not GPU memory capacity or final image quality.
+
+## Documentation and development
+
+- [Usage reference](docs/USAGE.md): parameters, output modes, branches and compatibility.
+- [Detail passes and experiments](docs/TWOPASS.md): dependencies, switches and reproducibility limits.
+- [Prompt observations](docs/PROMPT_ENGINEERING.md): project experience with specific checkpoints and character LoRAs.
+- [Example config](config.example.json) / [config contract](config.schema.json).
+
+Run tests from the repository directory: `python -B -m unittest discover -s tests -v`. Personal configs and local working artifacts are excluded by `.gitignore`; the example config and schema are maintained with the repository.
+
+[Example image](examples/example_output.png) · [MIT License](LICENSE)

@@ -14,7 +14,7 @@ Thumbs.db
 _comfy_*.log
 ~$*
 *.xlsx
-lora_census.*
+lora_census*
 lora_summary.py
 lora_sig.py
 lora_shapes.py

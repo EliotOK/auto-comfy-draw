@@ -16,9 +16,13 @@ Usage:
       --output-dir C:/out --name demo --config config.demo.json
   python pipeline.py --config config.json --count 3 --prompt "a city at dusk"
   python pipeline.py --config config.json --init ref.png --denoise 0.6 --count 4
-  python pipeline.py --config config.json --server-out --count 4   # let ComfyUI write to its own output dir (no download)
+  python pipeline.py --config config.json --server-out C:/ComfyUI/output --count 4   # let ComfyUI write to its own output dir (no download)
 """
 import json, os, re, sys, time, random, subprocess, shlex, urllib.request, urllib.parse, argparse
+
+from pathlib import Path
+from pipeline_common import (resolve_prompts, split_prompts, expand_prompt, normalize_config,
+                             validate_run, check_output, preflight, validate_graphs)
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORTS = (8188, 8189)
@@ -64,10 +68,7 @@ def list_models(base, key, node):
     """Return the file list ComfyUI currently sees for a loadable folder."""
     info = api(base, f"/object_info/{node}")
     required = info[node]["input"]["required"]
-    for k, v in required.items():
-        if isinstance(v, list) and v and isinstance(v[0], list) and v[0]:
-            return [x for x in v[0]]
-    return []
+    return list(required[key][0])
 
 # ---- onboarding modes ----
 def cmd_discover(base):
@@ -80,43 +81,16 @@ def cmd_discover(base):
     print("TIP: if a model/LoRA is missing, restart ComfyUI (new files are picked up on boot).")
 
 def cmd_check(base, cfg_path, server_out=None):
-    ok = True
-    ck = list_models(base, "ckpt_name", "CheckpointLoaderSimple")
-    if cfg_path:
-        cfg = json.load(open(cfg_path, encoding="utf-8"))
-        server_root = server_out or cfg.get("server_output_dir")
-        model = cfg.get("model")
-        if model and model not in ck:
-            print(f"[FAIL] model '{model}' not found in ComfyUI checkpoints.")
-            ok = False
-        else:
-            print(f"[ok] model '{model}' found.")
-        if server_root:
-            if os.path.isdir(server_root) and os.access(server_root, os.R_OK):
-                print(f"[ok] server output root readable (read-only, no local write): {server_root}")
-            else:
-                print(f"[warn] server output root not readable: {server_root} "
-                      f"(ComfyUI still writes there; path report may be relative)")
-        else:
-            outdir = cfg.get("output_dir")
-            if outdir:
-                try:
-                    os.makedirs(outdir, exist_ok=True)
-                    print(f"[ok] output_dir writable: {outdir}")
-                except Exception as e:
-                    print(f"[FAIL] output_dir not writable: {outdir}: {e}")
-                    ok = False
-    else:
-        print(f"[ok] ComfyUI reachable ({len(ck)} checkpoints, " +
-              f"{len(list_models(base, 'lora_name', 'LoraLoader'))} LoRAs).")
-    if not ok:
-        sys.exit(1)
-    print("ALL CHECKS PASSED")
+    if not cfg_path:
+        cmd_discover(base)
+        return
+    cfg = normalize_config(json.loads(Path(cfg_path).read_text(encoding="utf-8")), server_out)
+    graph = build_graph(cfg, cfg.get("positive", ""), 0, "check", cfg.get("width", 832), cfg.get("height", 1216))
+    preflight(base, [graph], api)
+    check_output(cfg)
+
 
 def cmd_scaffold(args, base):
-    ck = list_models(base, "ckpt_name", "CheckpointLoaderSimple")
-    if args.model and args.model not in ck:
-        print(f"[warn] model '{args.model}' not in current ComfyUI checkpoint list; it may need a restart.")
     cfg = {
         "name": args.name or "demo",
         "model": args.model,
@@ -128,15 +102,16 @@ def cmd_scaffold(args, base):
                                       "username, monochrome, low quality, worst quality"),
         "width": args.width, "height": args.height,
         "steps": args.steps, "cfg": args.cfg,
-        "sampler": args.sampler, "scheduler": args.scheduler, "denoise": args.denoise,
+        "sampler": args.sampler, "scheduler": args.scheduler, "denoise": 1.0 if args.denoise is None else args.denoise,
         "start_cmd": getattr(args, "start_cmd", None) or "",
-        "server_out": bool(getattr(args, "server_out", False)),
-        "server_output_dir": "",
+        "server_output_dir": args.server_out,
+        "server_sub": args.server_sub,
         "output_dir": args.output_dir,
         "prefix": args.prefix or f"{args.name or 'pipeline'}/pipeline",
         "prompts": [] if args.prompts is None else [{"name": f"p{i+1}", "prompt": p.strip()}
-                                                    for i, p in enumerate(args.prompts.split("|")) if p.strip()],
+                                                    for i, p in enumerate(split_prompts(args.prompts)) if p.strip()],
     }
+    cfg = normalize_config(cfg)
     target = args.config or f"config.{cfg['name']}.json"
     with open(target, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
@@ -147,7 +122,7 @@ def cmd_start(args, host, ports=DEFAULT_PORTS):
     cmd = args.start_cmd
     if not cmd and args.config:
         try:
-            cmd = json.load(open(args.config, encoding="utf-8")).get("start_cmd")
+            cmd = json.loads(Path(args.config).read_text(encoding="utf-8")).get("start_cmd")
         except Exception:
             pass
     if not cmd:
@@ -155,7 +130,8 @@ def cmd_start(args, host, ports=DEFAULT_PORTS):
                          "If you'd rather start ComfyUI yourself, omit --start and open it manually.")
     print("starting ComfyUI:", cmd)
     try:
-        subprocess.Popen(shlex.split(cmd), shell=False)
+        subprocess.Popen(cmd if os.name == "nt" else shlex.split(cmd), shell=False,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except Exception as e:
         raise SystemExit(f"[FAIL] could not launch ComfyUI ({e}). Please start it manually, then re-run.")
     deadline = time.time() + 120
@@ -171,7 +147,7 @@ def cmd_start(args, host, ports=DEFAULT_PORTS):
         time.sleep(3)
     raise SystemExit("[timeout] ComfyUI did not become reachable in 120s. Please start it manually, then re-run.")
 
-# ---- graph + run (unchanged logic) ----
+# ---- graph + run ----
 def lora_nodes(cfg):
     if cfg.get("lora"):
         return {"2": {"class_type": "LoraLoader", "inputs": {"model": ["1", 0], "clip": ["1", 1],
@@ -239,50 +215,29 @@ def server_path(server_root, img):
         return p if os.path.exists(p) else f"{p}  (not found yet — check the server output root)"
     return f"{rel}  (relative to ComfyUI's output dir)"
 
-def resolve_prompts(cfg, prompt, names):
-    base = cfg.get("positive", "")
-    if prompt is not None:
-        return [f"p{i+1}" for i in range(len(prompt.split("|")))], [p.strip() for p in prompt.split("|") if p.strip()]
-    cfg_prompts = cfg.get("prompts", [])
-    if names is not None:
-        wanted = [n.strip() for n in names.split(",")]
-        picks = []
-        for s in cfg_prompts:
-            if isinstance(s, dict):
-                if s.get("name") in wanted: picks.append((s["name"], s["prompt"]))
-            else:
-                if s in wanted: picks.append((s, s))
-        if not picks: raise SystemExit(f"--names not found: {wanted}")
-        return [n for n, _ in picks], [p for _, p in picks]
-    if not cfg_prompts:
-        return ["default"], [base]
-    names_list, prompts_list = [], []
-    for s in cfg_prompts:
-        if isinstance(s, dict): names_list.append(s["name"]); prompts_list.append(s["prompt"])
-        else: names_list.append(s); prompts_list.append(s)
-    return names_list, prompts_list
-
 def run(base, args, cfg):
+    cfg = normalize_config(cfg, args.server_out)
+    validate_run(args)
     w, h = cfg.get("width", 832), cfg.get("height", 1216)
-    server_root = args.server_out or cfg.get("server_output_dir")
+    server_root = cfg.get("server_output_dir")
     direct = bool(server_root)
     outdir = cfg.get("output_dir")
-    if not direct:
-        os.makedirs(outdir, exist_ok=True)
+    # Output directories are checked only after offline planning.
     base_name = cfg.get("name", "pipeline")
     sub = (args.server_sub or cfg.get("server_sub") or base_name).strip("/")
     seq = seq_next(server_root, sub, base_name) if direct else 1
     if direct:
         log(f"direct mode: no local write; server saves under {os.path.join(server_root, sub)} (next seq {seq:03d})")
-    prefix = cfg.get("prefix", base_name)
+    prefix = args.prefix if args.prefix is not None else cfg.get("prefix", base_name)
     base_positive = cfg.get("positive", "")
     names_list, prompt_list = resolve_prompts(cfg, args.prompt, args.names)
     def pos_for(t): return ", ".join(x for x in (base_positive, t) if x)
     basis = args.seed_basis if args.seed_basis is not None else random.randrange(1, 2**31 - 1)
+    log(f"SEED_BASIS: {basis}")
     jobs = []
     for idx, (name, txt) in enumerate(zip(names_list, prompt_list)):
         pos = pos_for(txt)
-        base_seed = (basis + idx * 100000) if args.seed_basis is not None else random.randrange(1, 2**31 - 1)
+        base_seed = basis + (0 if args.seed_fixed else idx * 100000)
         for k in range(args.count):
             seed = base_seed + k
             if direct:
@@ -290,18 +245,26 @@ def run(base, args, cfg):
                 seq += 1
             else:
                 jprefix = f"{prefix}/{name}_{seed}"
-            jobs.append({"name": name, "k": k + 1, "count": args.count, "seed": seed, "pos": pos,
+            jobs.append({"name": name, "k": k + 1, "count": args.count, "seed": seed, "pos": expand_prompt(pos, seed, args.pick, idx * args.count + k),
                          "prefix": jprefix, "w": w, "h": h})
+    graphs = [build_graph(cfg, j["pos"], j["seed"], j["prefix"], j["w"], j["h"], args.init, args.denoise) for j in jobs]
+    validate_graphs(graphs)
+    if args.dry_run:
+        log(json.dumps({"jobs": jobs, "graphs": graphs}, ensure_ascii=False, indent=2))
+        return
+    preflight(base, graphs, api)
+    check_output(cfg)
+    if args.check:
+        return
     ids = []
-    for j in jobs:
-        resp = api(base, "/prompt", {"prompt": build_graph(cfg, j["pos"], j["seed"], j["prefix"], j["w"], j["h"], args.init, args.denoise),
-                                     "client_id": "auto-comfy-draw"})
+    for j, graph in zip(jobs, graphs):
+        resp = api(base, "/prompt", {"prompt": graph, "client_id": "auto-comfy-draw"})
         if "prompt_id" not in resp:
             raise SystemExit(f"/prompt validation failed: {json.dumps(resp, ensure_ascii=False)[:800]}")
         j["pid"] = resp["prompt_id"]; ids.append(j["pid"])
         log(f"[{j['name']}#{j['k']}/{j['count']}] queued pid={j['pid']} seed={j['seed']}")
     pending = set(ids); failures = []
-    deadline = time.time() + 2400
+    deadline = time.time() + args.timeout
     while pending and time.time() < deadline:
         for pid in list(pending):
             try:
@@ -317,9 +280,10 @@ def run(base, args, cfg):
                 failures.append(pid); log(f"[error] pid={pid} failed: {' | '.join(msgs) if msgs else 'unknown'}")
                 pending.discard(pid); continue
             outs = entry.get("outputs", {})
-            if not outs:
-                if status in ("success", "completed"):
-                    failures.append(pid); log(f"[error] pid={pid} finished with no output")
+            if status not in ("success", "completed"):
+                continue
+            if not any(out.get("images") for out in outs.values()):
+                failures.append(pid); log(f"[error] pid={pid} finished with no image")
                 pending.discard(pid); continue
             for nid, out in outs.items():
                 for img in out.get("images", []):
@@ -328,7 +292,8 @@ def run(base, args, cfg):
                     else:
                         log(f"SAVED: {download(base, outdir, img)}")
             pending.discard(pid)
-        time.sleep(4)
+        if pending:
+            time.sleep(4)
     if pending:
         failures.extend(pending); log(f"[timeout] {len(pending)} unresolved")
     log(f"remaining: {len(pending)} failures: {len(failures)} DONE")
@@ -345,6 +310,10 @@ def main():
     ap.add_argument("--host", default=DEFAULT_HOST)
     ap.add_argument("--port", type=int, default=None)
     ap.add_argument("--seed-basis", type=int, default=None)
+    ap.add_argument("--seed-fixed", action="store_true", help="share base seed across prompts")
+    ap.add_argument("--pick", choices=["random", "cycle"], default="random")
+    ap.add_argument("--dry-run", action="store_true", help="offline batch preview; no writes or submissions")
+    ap.add_argument("--timeout", type=int, default=2400)
     ap.add_argument("--server-out", default=None,
                     help="ComfyUI server output ROOT; enables direct-to-server output (no local download)")
     ap.add_argument("--server-sub", default=None,
@@ -373,23 +342,30 @@ def main():
     ap.add_argument("--prompts", default=None, help="'|'-separated initial prompts for --scaffold")
     args = ap.parse_args()
 
+    modes = [args.start, args.discover, args.scaffold, args.check, args.dry_run]
+    if sum(modes) > 1:
+        ap.error("choose one mode: start, discover, scaffold, check, dry-run")
     if args.start:
         cmd_start(args, args.host, DEFAULT_PORTS)
         return
-    base = f"http://{args.host}:{probe(args.host, args.port)}"
-    log(f"using {base}")
+    base = None if args.dry_run or args.scaffold else f"http://{args.host}:{probe(args.host, args.port)}"
+    if base:
+        log(f"using {base}")
     if args.discover:
         cmd_discover(base); return
     if args.scaffold:
-        if not args.model or not args.output_dir:
-            raise SystemExit("--scaffold requires --model and --output-dir")
+        if not args.model or not (args.output_dir or args.server_out):
+            raise SystemExit("--scaffold requires --model and either --output-dir or --server-out")
         cmd_scaffold(args, base); return
-    if args.check:
-        cmd_check(base, args.config, args.server_out); return
+    if args.check and not args.config:
+        cmd_check(base, None); return
     if not args.config:
         raise SystemExit("--config is required to run (or use --discover/--scaffold/--check)")
-    cfg = json.load(open(args.config, encoding="utf-8"))
+    cfg = json.loads(Path(args.config).read_text(encoding="utf-8"))
     run(base, args, cfg)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (ValueError, RuntimeError, OSError) as exc:
+        raise SystemExit("[FAIL] " + str(exc))
