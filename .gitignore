@@ -29,3 +29,7 @@ OUTPUT_CONVENTION.md
 MULTIROOT_FEASIBILITY.md
 BRONYA_TEST_RESULTS.md
 NSFW_TRAINING_SCAN.md
+
+# local overlays (never publish)
+AGENTS.local.md
+CLAUDE.local.md
