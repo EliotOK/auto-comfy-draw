@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "auto-comfy-draw config",
+  "description": "Parameter contract for pipeline.py / pipeline_twopass.py config files.",
+  "type": "object",
+  "required": ["model", "output_dir"],
+  "additionalProperties": true,
+  "properties": {
+    "name": { "type": "string", "description": "Output name; also the default --server-sub.", "default": "demo" },
+    "model": { "type": "string", "description": "Checkpoint filename; must be one of the names reported by --discover." },
+    "lora": { "type": ["string", "null"], "description": "LoRA filename (optional)." },
+    "lora_strength": { "type": "number", "default": 0.9, "description": "LoRA strength; lower (0.4-0.6) for reference-image work." },
+    "positive": { "type": "string", "description": "Base positive prompt (danbooru/Illustrious style)." },
+    "negative": { "type": "string", "description": "Negative prompt." },
+    "width": { "type": "integer", "default": 832, "multipleOf": 8 },
+    "height": { "type": "integer", "default": 1216, "multipleOf": 8 },
+    "steps": { "type": "integer", "default": 28, "minimum": 1 },
+    "cfg": { "type": "number", "default": 6.5, "minimum": 0 },
+    "sampler": { "type": "string", "default": "dpmpp_2m" },
+    "scheduler": { "type": "string", "default": "karras" },
+    "denoise": { "type": "number", "default": 1.0, "minimum": 0, "maximum": 1 },
+    "start_cmd": { "type": "string", "default": "", "description": "Command to launch ComfyUI; used by --start after user consent." },
+    "server_out": { "type": ["string", "null"], "description": "Server output ROOT; enables direct-write mode (script only reads it)." },
+    "server_output_dir": { "type": ["string", "null"], "description": "Alias of server_out for config-driven direct mode." },
+    "server_sub": { "type": ["string", "null"], "description": "Subfolder under the server output root." },
+    "output_dir": { "type": "string", "description": "Download-mode output directory (must be writable by the script; not needed in direct mode)." },
+    "prefix": { "type": "string", "description": "Filename prefix / subfolder for saved images." },
+    "prompts": {
+      "type": "array",
+      "description": "Named prompts selectable with --names.",
+      "items": {
+        "oneOf": [
+          { "type": "string" },
+          { "type": "object", "required": ["name", "prompt"],
+            "properties": { "name": { "type": "string" }, "prompt": { "type": "string" } } }
+        ]
+      }
+    }
+  }
+}

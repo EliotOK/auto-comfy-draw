@@ -6,5 +6,26 @@ __pycache__/
 .venv/
 config*.json
 !config.example.json
+!config.schema.json
 .DS_Store
 Thumbs.db
+
+# ---- local-only working files (never publish) ----
+_comfy_*.log
+~$*
+*.xlsx
+lora_census.*
+lora_summary.py
+lora_sig.py
+lora_shapes.py
+lora_tag_export.py
+build_lora_xlsx.py
+nsfw_verdict.py
+LORA_*.md
+LORA_*.tsv
+LORA_TAG_INDEX.md
+nepgear_map.txt
+OUTPUT_CONVENTION.md
+MULTIROOT_FEASIBILITY.md
+BRONYA_TEST_RESULTS.md
+NSFW_TRAINING_SCAN.md
