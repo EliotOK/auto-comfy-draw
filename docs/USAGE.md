@@ -28,6 +28,8 @@ python pipeline.py --config config.city.json --count 2 --seed-basis 100
 python pipeline.py --config config.city.json --init ref.png --denoise 0.6 --count 1
 ```
 
+首次安装的可复制 prompt 与连接引导见 [README](../README.md#安装复制这段话给-agent)。discover 没有发现底模时会警告生成需要兼容底模；没有 LoRA 时提示其为可选项。
+
 scaffold 离线生成配置，资源存在性由 discover / check 验证。scaffold 需 `--model` 和 `--output-dir` 或 `--server-out`；`--config` 省略时写 `config.<name>.json`。默认 name 为 demo，尺寸 832×1216，steps 28，cfg 6.5，sampler dpmpp_2m，scheduler karras，denoise 1.0。可指定 `--lora`、`--lora-strength`、`--positive`、`--negative`、`--prefix`、`--prompts`、`--start-cmd`。生成配置会覆盖指定配置文件，复用前先检查已有内容。
 
 ## 运行参数
@@ -64,7 +66,9 @@ scaffold 离线生成配置，资源存在性由 discover / check 验证。scaff
 
 `--dry-run` 离线打印全部 jobs 和 graphs，不连接服务、不创建目录、不提交任务。直写模式仍可能读取输出目录以规划编号。
 
-`--check` 使用所选驱动与当前运行参数建图，通过 `/object_info` 检查所用节点、必填输入、枚举资源和数值范围。下载目录用临时文件验证写入后自动清理；直写不试写服务端目录。实际出图同样自动预检。检查不验证模型架构相容性、显存容量、插件自定义校验和最终图像质量。
+`--check` 使用所选驱动与当前运行参数建图，通过 `/object_info` 检查所用节点、必填输入、枚举资源和数值范围。预检会汇总并去重可检测的缺失节点、不可用枚举资源、缺失必填项和数值范围错误，附带处理建议；任一问题都会阻止整个批次入队。节点缺失时无法检查它的资源列表，补齐后需要重跑。
+
+下载目录用临时文件验证写入后自动清理；直写不试写服务端目录。实际出图同样自动预检。检查不验证模型架构相容性、显存容量、插件自定义校验和最终图像质量。
 
 批次逐项入队并轮询 `/history/<prompt_id>`；保留 queued 日志中的任务 ID。服务端失败、输出缺失、下载失败或超时以非零状态结束。发生中途提交失败时已入队任务仍可能继续，先查明状态再决定是否补交；不要直接重提整个批次。
 

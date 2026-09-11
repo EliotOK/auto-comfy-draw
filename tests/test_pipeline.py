@@ -152,6 +152,53 @@ class PipelineTests(unittest.TestCase):
         graph["1"]["inputs"]["lora_name"] = "available"
         preflight("mock", [graph], lambda *args: info)
 
+    def test_preflight_collects_and_deduplicates_issues(self):
+        graph = {
+            "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "missing.safetensors"}},
+            "2": {"class_type": "LoraLoader", "inputs": {"lora_name": "missing-lora.safetensors"}},
+            "3": {"class_type": "FaceDetailer", "inputs": {}},
+            "4": {"class_type": "KSampler", "inputs": {"cfg": 200}},
+        }
+        info = {
+            "CheckpointLoaderSimple": {"input": {"required": {"ckpt_name": [["available.safetensors"]]}}},
+            "LoraLoader": {"input": {"required": {"lora_name": [[]]}}},
+            "KSampler": {"input": {"required": {"steps": ["INT"], "cfg": ["FLOAT", {"max": 100}]}}},
+        }
+        with self.assertRaises(ValueError) as raised:
+            preflight("mock", [graph, graph], lambda *args: info)
+        message = str(raised.exception)
+        self.assertIn("5 issue(s)", message)
+        for expected in ("ckpt_name unavailable", "lora_name unavailable", "node missing: FaceDetailer",
+                         "KSampler.steps is required", "KSampler.cfg=200 outside server max=100"):
+            self.assertEqual(message.count(expected), 1, message)
+        self.assertIn("Suggested next steps:", message)
+        self.assertIn("resources cannot be checked", message)
+
+    def test_failed_preflight_blocks_both_drivers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cfg = self.config(directory)
+            for module in (pipeline, twopass):
+                calls = []
+                def api(base, path, *args, **kwargs):
+                    calls.append(path)
+                    self.assertEqual(path, "/object_info")
+                    return {}
+                with patch.object(sys, "argv", [module.__file__, "--config", str(cfg), "--count", "2"]), \
+                     patch.object(module, "probe", return_value=8188 if module is pipeline else "mock"), \
+                     patch.object(module, "api", side_effect=api), \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    with self.assertRaises(ValueError):
+                        module.main()
+                self.assertEqual(calls, ["/object_info"])
+            self.assertFalse((Path(directory) / "must-not-exist").exists())
+
+    def test_discovery_explains_empty_resources(self):
+        output = io.StringIO()
+        with patch.object(pipeline, "list_models", return_value=[]), contextlib.redirect_stdout(output):
+            pipeline.cmd_discover("mock")
+        self.assertIn("No checkpoints found", output.getvalue())
+        self.assertIn("LoRA is optional", output.getvalue())
+
     def test_check_never_submits(self):
         with tempfile.TemporaryDirectory() as directory:
             cfg = self.config(directory)

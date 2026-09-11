@@ -164,19 +164,43 @@ def check_output(cfg):
 
 
 def preflight(base, graphs, api):
-    """Check nodes, required inputs and advertised enum choices, without queueing."""
+    """Report all discoverable graph issues before any job is queued."""
     info = api(base, "/object_info")
     checked = set()
+    issues, hints = {}, {}
+
+    def report(message, hint):
+        issues[message] = None
+        hints[hint] = None
+
+    def resource_hint(kind):
+        if kind == "CheckpointLoaderSimple":
+            return "Checkpoint: choose an available compatible model or install it in the server's checkpoints folder, then refresh discovery."
+        if kind == "LoraLoader":
+            return "LoRA: install the requested compatible LoRA in the server's loras folder, or explicitly choose a config without it."
+        if kind == "LoadImage":
+            return "Reference image: place the file in the server's input folder and use its server-side name."
+        if kind == "UpscaleModelLoader":
+            return "Upscaling: install the requested upscale model, choose an available one, or explicitly use --no-upscale."
+        if kind in ("UltralyticsDetectorProvider", "SAMLoader", "FaceDetailer", "BboxDetectorSEGS", "DetailerForEach"):
+            return "Detail passes: check Impact Pack and its detector dependencies/models; explicitly use --no-face or --no-hand if those passes are not needed."
+        return "Check the workflow inputs against this server's node definitions and available choices."
+
     for graph in graphs:
         for node in graph.values():
             kind = node["class_type"]
             if kind not in info:
-                raise ValueError("Required ComfyUI node missing: " + kind)
+                report("Required ComfyUI node missing: " + kind,
+                       "Install or enable the missing node package on the server; its resources cannot be checked until the node is available.")
+                if kind in ("UltralyticsDetectorProvider", "SAMLoader", "FaceDetailer", "BboxDetectorSEGS", "DetailerForEach"):
+                    hints[resource_hint(kind)] = None
+                continue
             spec = info[kind].get("input", {})
             inputs = node["inputs"]
             for key in spec.get("required", {}):
                 if key not in inputs:
-                    raise ValueError("%s.%s is required by this server" % (kind, key))
+                    report("%s.%s is required by this server" % (kind, key),
+                           "Update the workflow inputs to match the installed node version.")
             for key, definition in dict(spec.get("required", {}), **spec.get("optional", {})).items():
                 if key not in inputs or isinstance(inputs[key], list):
                     continue
@@ -186,11 +210,16 @@ def preflight(base, graphs, api):
                     continue
                 checked.add(signature)
                 if isinstance(definition[0], list) and value not in definition[0]:
-                    raise ValueError("%s.%s unavailable: %s" % (kind, key, value))
+                    report("%s.%s unavailable: %s" % (kind, key, value), resource_hint(kind))
                 if len(definition) > 1 and isinstance(definition[1], dict) and type(value) in (int, float):
                     for bound, compare in (("min", lambda v: value < v), ("max", lambda v: value > v)):
                         if bound in definition[1] and compare(definition[1][bound]):
-                            raise ValueError("%s.%s outside server %s" % (kind, key, bound))
+                            report("%s.%s=%s outside server %s=%s" % (kind, key, value, bound, definition[1][bound]),
+                                   "Adjust the reported numeric inputs to the server's supported ranges.")
+    if issues:
+        raise ValueError("Preflight found %d issue(s); no jobs submitted.\n%s\nSuggested next steps:\n%s" % (
+            len(issues), "\n".join("- " + message for message in issues),
+            "\n".join("- " + hint for hint in hints)))
     print("[ok] workflow nodes, required inputs and advertised choices checked")
 
 

@@ -78,7 +78,11 @@ def cmd_discover(base):
     for x in ck: print("  -", x)
     print("Available LoRAs:", len(lora))
     for x in lora: print("  -", x)
-    print("TIP: if a model/LoRA is missing, restart ComfyUI (new files are picked up on boot).")
+    if not ck:
+        print("[warn] No checkpoints found. Generation needs a compatible checkpoint in the server's checkpoints folder.")
+    if not lora:
+        print("[info] No LoRAs found. LoRA is optional; basic generation can use a compatible checkpoint alone.")
+    print("TIP: if an expected file is missing, check its server-side folder and refresh discovery; restart ComfyUI if its list remains stale.")
 
 def cmd_check(base, cfg_path, server_out=None):
     if not cfg_path:

@@ -8,6 +8,36 @@ auto-comfy-draw is a skill for AI agents. You describe the image; the agent foll
 
 It is intended for people who already have ComfyUI and models and want conversational generation, batch variations and iterative adjustments. The Python drivers use only the standard library. Inference runs on the connected ComfyUI service.
 
+## Install: copy this prompt to your agent
+
+Send the following to an AI agent that can access local files and execute commands:
+
+```text
+Install and configure this ComfyUI image-generation skill for me:
+https://github.com/EliotOK/auto-comfy-draw
+
+Check this agent's supported skill location and existing installations. Keep the complete scripts, config schema and referenced documents, and tell me where you installed it. If automatic skill discovery is unavailable, reference it from the project AGENTS.md and explain that integration method.
+Then check the connection to my ComfyUI. Reuse a configured address; if none is configured for local use, try 127.0.0.1 on ports 8188 and 8189. Ask for a remote address only if it is needed and unknown.
+Once connected, report the checkpoint and LoRA counts and help prepare a compatible initial config. Summarize missing models or nodes, affected features and suggested fixes. Before downloading models, installing nodes or starting the service, check existing authorization and ask only if it is unclear.
+For this request, complete installation, connection checks and workflow preflight only. Do not generate images; wait for my image description.
+```
+
+A ComfyUI service and compatible models are prerequisites. This setup flow checks them; installing the skill does not automatically install ComfyUI, models or extension nodes.
+
+### What first-time setup reports
+
+| Result | Guidance |
+|---|---|
+| Connected | Actual service address, checkpoint/LoRA counts and intended output mode |
+| Connection failed | Attempted address and error, followed by service or remote-connection checks |
+| No checkpoints | Explain that generation is blocked and identify the compatible-checkpoint and server-folder requirements |
+| No LoRAs | Explain that LoRA is optional and a compatible checkpoint can generate images on its own |
+| Requested model, reference or node missing | Summarize discoverable issues and ways to resolve them |
+| Detail dependencies missing | Identify the affected face, hand or upscale stage and let the user decide whether to install dependencies or adjust the workflow |
+| Preflight passed | Summarize the ready config and accept an image description; continue if generation was already requested |
+
+The drivers do not download resources or silently switch models or disable detail passes after a failed check. Resources belonging to missing nodes cannot be inspected yet; rerun preflight after installing those nodes.
+
 ## What to ask
 
 - “Generate four wide views of a city skyline at dusk.”
@@ -42,7 +72,7 @@ A typical run follows these steps:
 1. **Discover resources.** Probe the service and read available checkpoint and LoRA filenames from node information.
 2. **Configure the image.** Reuse or generate a JSON config with the model, base prompts, image description, dimensions and sampling settings.
 3. **Plan the batch.** Expand prompt branches, assign seeds and output prefixes, and build ComfyUI API graphs.
-4. **Check and submit.** An offline `--dry-run` previews every job. An online `--check` verifies nodes and resources. Actual runs also preflight their graphs before submitting each job to `/prompt`.
+4. **Check and submit.** An offline `--dry-run` previews every job. An online `--check` collects node, resource and parameter issues with suggested next steps. Actual runs also preflight their graphs before submitting each job to `/prompt`.
 5. **Wait and collect.** Poll `/history/<prompt_id>` for each submitted job, then download images or report server-side paths. Failures, missing output and timeouts produce a nonzero exit status.
 6. **Review and iterate.** The agent checks images against the request and adjusts prompts or seeds within the agreed scope and image count. Visual quality review belongs to the agent; the driver does not contain a visual scoring model.
 
